@@ -1,0 +1,47 @@
+/*
+ * Terminal-inspired 深色主題。所有顏色、字體、密度都用 CSS variables，方便統一調整。
+ * 只借鑑資訊密度、配色同操作感；冇使用任何第三方商標或專有素材。
+ */
+:root {
+  color-scheme: dark;
+
+  --bg: #0a0a0b;
+  --bg-panel: #111113;
+  --bg-head: #19191c;
+  --bg-hover: #1d1d22;
+  --bg-select: #2b2210;
+  --bg-input: #050506;
+  --border: #2b2b30;
+  --border-strong: #3d3d45;
+
+  --text: #ececec;
+  --text-dim: #a4a4ad;
+  --text-faint: #8a8a94;
+
+  --amber: #ffa028;
+  --cyan: #3ad8e8;
+  --green: #35d07f;
+  --red: #ff5f62;
+  --yellow: #f0cd3a;
+  --blue-grey: #8fa6c6;
+
+  --flash-up: rgba(53, 208, 127, 0.45);
+  --flash-down: rgba(255, 95, 98, 0.45);
+  --flash-up-static: rgba(53, 208, 127, 0.24);
+  --flash-down-static: rgba(255, 95, 98, 0.24);
+  --flash-duration: 900ms;
+
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Cascadia Code', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-size: 12px;
+  --row-height: 21px;
+  --radius: 2px;
+  --focus-ring: 2px solid var(--cyan);
+
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: 1.35;
+  background: var(--bg);
+  color: var(--text);
+  scrollbar-color: var(--border-strong) var(--bg);
+  scrollbar-width: thin;
+}

@@ -1,0 +1,16 @@
+# 示範用 override：拉長 mock snapshot 嘅傳輸時間，令重啟後嘅「RECOVERING」狀態可以用肉眼睇到。
+# 預設 mock snapshot 只需 0.2 – 0.4 秒，恢復後幾乎即刻 LIVE，所以平時睇唔到中間狀態。
+#
+#   docker compose -f compose.yaml -f compose.slow-snapshot.yaml up -d --force-recreate backend
+#
+# 示範完之後，去掉 override 再重建 backend 就回復預設值：
+#
+#   docker compose up -d --force-recreate backend
+#
+# 數字意思：mock-stream-b 嘅 snapshot 要 12 秒、mock-api-c 要 6 秒（mock-stream-a 維持預設 0.4 秒），
+# 所以重啟後三個來源會先後由 RECOVERING 變 LIVE。Source 索引對應 appsettings.json 入面 DataHub:Mock:Sources 嘅次序。
+services:
+  backend:
+    environment:
+      DataHub__Mock__Sources__1__SnapshotLatencyMs: "12000"
+      DataHub__Mock__Sources__2__SnapshotLatencyMs: "6000"

@@ -1,0 +1,23 @@
+# .NET
+bin/
+obj/
+.vs/
+*.user
+TestResults/
+
+# Backend 運行期寫出嘅 checkpoint（dotnet run 時喺 backend/src/DataHub.Api/data/checkpoints）
+**/data/checkpoints/
+
+# Node
+node_modules/
+dist/
+
+# 環境設定：只提交 .env.example
+.env
+.env.*
+!.env.example
+
+# 本機工具／測試輸出
+*.log
+.tmp-shots/
+.playwright-mcp/

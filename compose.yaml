@@ -1,0 +1,47 @@
+# Data Hub PoC：backend（ASP.NET Core）+ frontend（nginx 提供 React 靜態檔並轉發 /api）。
+# 只有兩個 service，冇 Redis／PostgreSQL／Kafka 等額外基建；所有數據來源都係 mock。
+#
+#   docker compose up --build        # 前景啟動
+#   docker compose up --build -d     # 背景啟動
+#   docker compose down              # 停止（保留 checkpoint volume）
+#   docker compose down -v           # 停止並刪除 checkpoint volume（下次啟動冇舊數據可恢復）
+#
+# 所有 ${...:-預設值} 都可以用 .env（由 .env.example 複製）或者 shell 環境變數覆寫。
+name: datahub-poc
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: datahub-poc-backend:local
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      DataHub__Api__ExportMaxRows: ${EXPORT_MAX_ROWS:-10000}
+      # 任何 appsettings 設定都可以用 DataHub__區段__名稱 覆寫，例如：
+      # DataHub__Api__AdminEnabled: "false"
+    volumes:
+      # Checkpoint 目錄（對應 Dockerfile 內 DataHub__Checkpoint__Directory）。Container 重建之後仍然保留，所以可以示範重啟恢復。
+      - datahub-checkpoints:/var/lib/datahub/checkpoints
+    ports:
+      # 預設只綁 127.0.0.1；admin endpoints 冇認證，唔好喺共用網絡上改成 0.0.0.0。
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_HOST_PORT:-5080}:5080"
+    restart: unless-stopped
+    # 收到 SIGTERM 之後 backend 會先停 source、再寫最後一次 checkpoint。
+    stop_grace_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # 喺 build 時寫入 bundle，改咗要重新 build（docker compose up --build）。
+        VITE_POLL_INTERVAL_MS: ${VITE_POLL_INTERVAL_MS:-1000}
+    image: datahub-poc-frontend:local
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_HOST_PORT:-8080}:8080"
+    restart: unless-stopped
+
+volumes:
+  datahub-checkpoints:
