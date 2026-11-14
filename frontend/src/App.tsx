@@ -9,6 +9,7 @@ import { SourcePanel } from './components/SourcePanel'
 import { StatusBar } from './components/StatusBar'
 import { Toolbar } from './components/Toolbar'
 import { GridControls } from './components/GridControls'
+import { NewsPanel } from './components/NewsPanel'
 import { config } from './config'
 import { useAdminActions } from './hooks/useAdminActions'
 import { useDataHub } from './hooks/useDataHub'
@@ -19,6 +20,7 @@ import { rowKey } from './lib/flash'
 import { defaultColumns, defaultFilters, defaultSort, toggleSort } from './lib/grid'
 
 export default function App() {
+  const [product, setProduct] = useState<'equities' | 'news'>('equities')
   const [sourceFilter, setSourceFilter] = useState<string | null>(null)
   const [instrumentInput, setInstrumentInput] = useState('')
   const [pageSize, setPageSize] = useState<number>(config.defaultPageSize)
@@ -99,7 +101,6 @@ export default function App() {
         }
       : null
 
-  const summary = health?.sources
   const refreshSnapshot = () => {
     const ids = sourceFilter ? [sourceFilter] : (sourceList ?? []).map((source) => source.sourceId)
     void actions.refreshSnapshots(ids)
@@ -121,8 +122,6 @@ export default function App() {
         mockMode={health?.mockMode ?? null}
         lastResponseMs={state.lastRefreshMs}
         disconnectedSinceMs={state.disconnectedSinceMs}
-        live={backendDown || !summary ? null : summary.live}
-        total={backendDown || !summary ? null : summary.total}
       />
       <Banners
         connection={state.connection}
@@ -130,8 +129,13 @@ export default function App() {
         lastRefreshMs={state.lastRefreshMs}
         pollIntervalMs={config.pollIntervalMs}
         apiError={apiError}
-        sources={sourceList}
+        sources={product === 'equities' ? sourceList : null}
       />
+      <nav className="product-tabs" aria-label="Data products">
+        <button className="btn" aria-current={product === 'equities' ? 'page' : undefined} onClick={() => setProduct('equities')}>EQUITIES</button>
+        <button className="btn" aria-current={product === 'news' ? 'page' : undefined} onClick={() => setProduct('news')}>NEWS</button>
+      </nav>
+      {product === 'equities' ? <>
       <Toolbar
         sources={sourceList ?? []}
         sourceFilter={sourceFilter}
@@ -205,6 +209,9 @@ export default function App() {
         sourceErrors={(sourceList ?? []).filter((source) => source.lastError).map((source) => source.sourceId)}
         paused={paused}
       />
+      </> : <NewsPanel adminEnabled={health?.adminEnabled === true && !backendDown}
+        backendDown={backendDown} busy={actions.busy}
+        onOutage={(seconds) => void actions.simulateNewsOutage(seconds)} actionResult={actions.result} />}
     </div>
   )
 }

@@ -17,6 +17,13 @@ public sealed class DataHubOptions
     public FreshnessOptions Freshness { get; set; } = new();
     public ApiOptions Api { get; set; } = new();
     public MockOptions Mock { get; set; } = new();
+    public NewsOptions News { get; set; } = new();
+}
+
+public sealed class NewsOptions
+{
+    public int MaxItems { get; set; } = 500;
+    public int RetentionDays { get; set; } = 7;
 }
 
 public sealed class SnapshotOptions

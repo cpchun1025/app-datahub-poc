@@ -25,6 +25,7 @@ public sealed class FileCheckpointStore : ICheckpointStore
 
     // null = 未知；true/false = 最近一次保存或載入時 primary 嘅狀態。用嚟避免將損壞嘅 primary 輪替去 .bak、蓋走最後一份好嘅 checkpoint。
     private bool? _primaryKnownGood;
+    private bool _futureSchemaSeen;
 
     public FileCheckpointStore(IOptions<DataHubOptions> options, IHostEnvironment environment, ILogger<FileCheckpointStore> logger)
     {
@@ -64,6 +65,7 @@ public sealed class FileCheckpointStore : ICheckpointStore
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                if (ex is FutureCheckpointFormatException) _futureSchemaSeen = true;
                 if (label == "primary")
                 {
                     _primaryKnownGood = false;
@@ -80,6 +82,24 @@ public sealed class FileCheckpointStore : ICheckpointStore
 
     public async Task<CheckpointSaveResult> SaveAsync(CheckpointPayload payload, CancellationToken cancellationToken)
     {
+        foreach (var path in new[] { _primaryPath, _backupPath })
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                CheckpointSerializer.Deserialize(await File.ReadAllBytesAsync(path, cancellationToken));
+            }
+            catch (FutureCheckpointFormatException)
+            {
+                _futureSchemaSeen = true;
+            }
+            catch (CheckpointFormatException)
+            {
+                // Existing corruption is handled by the normal promotion and backup policy.
+            }
+        }
+        if (_futureSchemaSeen)
+            throw new IOException("Checkpoint save disabled: an unsupported future schema was found.");
         var started = Stopwatch.GetTimestamp();
         try
         {

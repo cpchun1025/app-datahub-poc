@@ -60,7 +60,7 @@ export function Banners({
       {connection === 'connected' && notLive.length > 0 ? (
         <output className="banner banner-info">
           <strong>
-            {notLive.length} OF {sources?.length ?? 0} SOURCES NOT LIVE
+            {notLive.length} OF {sources?.length ?? 0} PRICE SOURCES NOT LIVE
           </strong>
           <span>
             {notLive.map((source) => `${source.sourceId} ${statusInfo(source.status).label}`).join(' · ')} — values from

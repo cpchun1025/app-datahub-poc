@@ -5,17 +5,17 @@ using DataHub.Api.Configuration;
 using DataHub.Api.Domain;
 using DataHub.Api.Serialization;
 using DataHub.Api.Store;
+using DataHub.Api.News;
 
 namespace DataHub.Api.Persistence;
 
 /// <summary>
-/// Checkpoint 檔案格式（schemaVersion 1）：
-/// <c>{ schemaVersion, checkpointVersion, savedAtUtc, recordCount, payloadSha256, sources: [...] }</c>。
-/// <c>payloadSha256</c> 係 <c>sources</c> 原始 JSON bytes 嘅 SHA-256，用嚟偵測截斷同位元損壞（唔係防篡改）。
+/// Schema 2 adds news and its checksum; schema 1 remains readable.
+/// Checksums detect corruption, not malicious tampering.
 /// </summary>
 public static class CheckpointSerializer
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private static readonly JsonSerializerOptions Json = DataHubJson.CreateOptions();
 
@@ -28,6 +28,14 @@ public static class CheckpointSerializer
 
         var sourcesBytes = JsonSerializer.SerializeToUtf8Bytes(sources, Json);
         var hash = Convert.ToHexString(SHA256.HashData(sourcesBytes)).ToLowerInvariant();
+        var newsBytes = JsonSerializer.SerializeToUtf8Bytes(payload.News
+            .OrderBy(item => item.SourceId, StringComparer.Ordinal)
+            .ThenBy(item => item.ArticleId, StringComparer.Ordinal).ToArray(), Json);
+        var newsHash = Convert.ToHexString(SHA256.HashData(newsBytes)).ToLowerInvariant();
+        var identitiesBytes = JsonSerializer.SerializeToUtf8Bytes(payload.NewsIdentities
+            .OrderBy(item => item.SourceId, StringComparer.Ordinal)
+            .ThenBy(item => item.ArticleId, StringComparer.Ordinal).ToArray(), Json);
+        var identitiesHash = Convert.ToHexString(SHA256.HashData(identitiesBytes)).ToLowerInvariant();
 
         using var buffer = new MemoryStream(sourcesBytes.Length + 512);
         using (var writer = new Utf8JsonWriter(buffer))
@@ -40,6 +48,12 @@ public static class CheckpointSerializer
             writer.WriteString("payloadSha256", hash);
             writer.WritePropertyName("sources");
             writer.WriteRawValue(sourcesBytes, skipInputValidation: true);
+            writer.WriteString("newsSha256", newsHash);
+            writer.WritePropertyName("news");
+            writer.WriteRawValue(newsBytes, skipInputValidation: true);
+            writer.WriteString("newsIdentitiesSha256", identitiesHash);
+            writer.WritePropertyName("newsIdentities");
+            writer.WriteRawValue(identitiesBytes, skipInputValidation: true);
             writer.WriteEndObject();
         }
 
@@ -78,7 +92,11 @@ public static class CheckpointSerializer
         }
 
         var schemaVersion = root.GetProperty("schemaVersion").GetInt32();
-        if (schemaVersion != SchemaVersion)
+        if (schemaVersion > SchemaVersion)
+        {
+            throw new FutureCheckpointFormatException(schemaVersion);
+        }
+        if (schemaVersion is not (1 or SchemaVersion))
         {
             throw new CheckpointFormatException($"Unsupported checkpoint schemaVersion {schemaVersion} (expected {SchemaVersion}).");
         }
@@ -141,7 +159,44 @@ public static class CheckpointSerializer
             sources.Add(data);
         }
 
-        var payload = new CheckpointPayload(version, savedAtUtc, sources);
+        IReadOnlyList<NewsRecord> news = [];
+        IReadOnlyList<NewsIdentity> identities = [];
+        if (schemaVersion == SchemaVersion)
+        {
+            var newsElement = root.GetProperty("news");
+            var newsHash = root.GetProperty("newsSha256").GetString();
+            var actualNewsHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(newsElement.GetRawText()))).ToLowerInvariant();
+            if (!string.Equals(newsHash, actualNewsHash, StringComparison.OrdinalIgnoreCase))
+                throw new CheckpointFormatException("Checkpoint news checksum mismatch.");
+            var items = newsElement.Deserialize<List<NewsRecord>>(Json)
+                ?? throw new CheckpointFormatException("Checkpoint news is null.");
+            var keys = new HashSet<(string, string)>();
+            foreach (var item in items)
+            {
+                if (string.IsNullOrWhiteSpace(item.SourceId) || string.IsNullOrWhiteSpace(item.ArticleId)
+                    || string.IsNullOrWhiteSpace(item.Title) || string.IsNullOrWhiteSpace(item.Publisher)
+                    || string.IsNullOrWhiteSpace(item.Language) || item.MappingWarnings is null
+                    || !Uri.TryCreate(item.Url, UriKind.Absolute, out var uri)
+                    || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+                    || !keys.Add((item.SourceId, item.ArticleId)))
+                    throw new CheckpointFormatException("Checkpoint contains invalid or duplicate news.");
+            }
+            news = items;
+            var identityElement = root.GetProperty("newsIdentities");
+            var identityHash = root.GetProperty("newsIdentitiesSha256").GetString();
+            var actualIdentityHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identityElement.GetRawText()))).ToLowerInvariant();
+            if (!string.Equals(identityHash, actualIdentityHash, StringComparison.OrdinalIgnoreCase))
+                throw new CheckpointFormatException("Checkpoint news identity checksum mismatch.");
+            var savedIdentities = identityElement.Deserialize<List<NewsIdentity>>(Json)
+                ?? throw new CheckpointFormatException("Checkpoint news identities are null.");
+            var seenIdentities = new HashSet<(string, string)>();
+            foreach (var identity in savedIdentities)
+                if (string.IsNullOrWhiteSpace(identity.SourceId) || string.IsNullOrWhiteSpace(identity.ArticleId)
+                    || !seenIdentities.Add((identity.SourceId, identity.ArticleId)))
+                    throw new CheckpointFormatException("Checkpoint contains invalid or duplicate news identities.");
+            identities = savedIdentities;
+        }
+        var payload = new CheckpointPayload(version, savedAtUtc, sources) { News = news, NewsIdentities = identities };
         if (payload.RecordCount != declaredCount)
         {
             throw new CheckpointFormatException($"Checkpoint recordCount mismatch (declared {declaredCount}, actual {payload.RecordCount}).");

@@ -52,6 +52,10 @@ public sealed partial class DataHubOptionsValidator : IValidateOptions<DataHubOp
             failures.Add("DataHub:Api:DefaultPageSize 必須介乎 1 同 MaxPageSize 之間。");
         if (options.Api.ExportMaxRows is < 1 or > 100_000)
             failures.Add("DataHub:Api:ExportMaxRows 必須介乎 1 至 100000。");
+        if (options.News.MaxItems is < 1 or > 100_000)
+            failures.Add("DataHub:News:MaxItems 必須介乎 1 至 100000。");
+        if (options.News.RetentionDays is < 1 or > 3650)
+            failures.Add("DataHub:News:RetentionDays 必須介乎 1 至 3650。");
 
         ValidateMockSources(options.Mock, failures);
 

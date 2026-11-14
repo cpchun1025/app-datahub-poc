@@ -2,6 +2,7 @@ using System.Globalization;
 using DataHub.Api.Configuration;
 using DataHub.Api.Domain;
 using DataHub.Api.Hosting;
+using DataHub.Api.News;
 using DataHub.Api.Persistence;
 using DataHub.Api.Sources;
 using DataHub.Api.Sources.Mock;
@@ -81,6 +82,10 @@ public static class DataHubEndpoints
             admin.MapPost("/mock/{sourceId}/outage", SimulateOutage)
                 .WithName("SimulateMockOutage")
                 .WithSummary("Mock only: make a mock source unavailable for N seconds (0 ends the outage).");
+
+            admin.MapPost("/mock-news/outage", SimulateNewsOutage)
+                .WithName("SimulateMockNewsOutage")
+                .WithSummary("Mock news only: simulate a fetch outage.");
         }
 
         return app;
@@ -262,6 +267,14 @@ public static class DataHubEndpoints
         int? seconds,
         ISourceCatalog catalog)
     {
+        var duration = seconds ?? 20;
+        if (duration is < 0 or > MaxOutageSeconds)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["seconds"] = [$"seconds must be between 0 and {MaxOutageSeconds} (0 ends the outage)."],
+            });
+        }
         var adapter = catalog.Adapters.FirstOrDefault(a => string.Equals(a.Descriptor.SourceId, sourceId, StringComparison.OrdinalIgnoreCase));
         if (adapter is null)
         {
@@ -279,17 +292,19 @@ public static class DataHubEndpoints
                 statusCode: StatusCodes.Status409Conflict);
         }
 
+        var until = mock.Upstream.SimulateOutage(TimeSpan.FromSeconds(duration));
+        return TypedResults.Ok(new MockOutageResponse(adapter.Descriptor.SourceId, duration, until));
+    }
+
+    private static Results<Ok<MockOutageResponse>, ValidationProblem> SimulateNewsOutage(int? seconds, MockNewsService news)
+    {
         var duration = seconds ?? 20;
         if (duration is < 0 or > MaxOutageSeconds)
-        {
             return TypedResults.ValidationProblem(new Dictionary<string, string[]>
             {
                 ["seconds"] = [$"seconds must be between 0 and {MaxOutageSeconds} (0 ends the outage)."],
             });
-        }
-
-        var until = mock.Upstream.SimulateOutage(TimeSpan.FromSeconds(duration));
-        return TypedResults.Ok(new MockOutageResponse(adapter.Descriptor.SourceId, duration, until));
+        return TypedResults.Ok(new MockOutageResponse(MockNewsService.SourceId, duration, news.SetOutage(duration)));
     }
 
     private static SourceDto ToDto(SourceView view)

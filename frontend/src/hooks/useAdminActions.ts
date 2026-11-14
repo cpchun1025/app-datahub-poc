@@ -126,5 +126,13 @@ export function useAdminActions(onSettled: () => void) {
     [run],
   )
 
-  return { busy, result, refreshSnapshots, saveCheckpoint, simulateOutage }
+  const simulateNewsOutage = useCallback(
+    (seconds: number) => run('outage', async (signal) => ({
+      ok: true,
+      text: `OUTAGE ${describeOutage(await api.simulateNewsOutage(seconds, signal))}`,
+    })),
+    [run],
+  )
+
+  return { busy, result, refreshSnapshots, saveCheckpoint, simulateOutage, simulateNewsOutage }
 }

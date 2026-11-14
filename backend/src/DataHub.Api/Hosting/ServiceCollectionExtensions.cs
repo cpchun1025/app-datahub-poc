@@ -4,6 +4,7 @@ using DataHub.Api.Persistence;
 using DataHub.Api.Sources;
 using DataHub.Api.Sources.Mock;
 using DataHub.Api.Store;
+using DataHub.Api.News;
 using DataHub.Api.Sync;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -32,12 +33,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SourceRegistry>();
         services.AddSingleton<SourceViewService>();
         services.AddSingleton<PriceReadService>();
+        services.AddSingleton<NewsStore>();
+        services.AddSingleton<MockNewsService>();
 
         // 註冊次序就係啟動次序，停止次序相反：
         // 啟動：Recovery（要喺 Kestrel 接受請求之前完成）→ Checkpoint → Mock feed → Source sync
         // 停止：Source sync 先停（唔再寫入）→ Mock feed → Checkpoint 做最後保存 → Recovery
         services.AddHostedService<RecoveryHostedService>();
         services.AddHostedService<CheckpointBackgroundService>();
+        services.AddHostedService(sp => sp.GetRequiredService<MockNewsService>());
         services.AddHostedService<MockFeedService>();
         services.AddHostedService<SourceSupervisor>();
 
@@ -96,6 +100,7 @@ public static class ServiceCollectionExtensions
 
         app.MapOpenApi();
         app.MapDataHubEndpoints();
+        app.MapNewsEndpoints();
 
         if (app.Environment.IsDevelopment() || options.Api.SwaggerUiEnabled)
         {

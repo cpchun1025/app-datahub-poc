@@ -1,7 +1,7 @@
 # Data Hub Frontend
 
 React 19 + TypeScript + Vite 嘅 Data Hub dashboard（Bloomberg Terminal 風格深色、高密度介面）。
-UI 只係顯示 backend 嘅 latest-state，唔會自己儲存或者計算資料。
+UI 顯示 backend 嘅 equity latest-state 同 bounded synthetic news metadata；唔係交易或歷史平台。
 
 完整架構同設計請睇 [根目錄 README](../README.md) 同 [doc/technical-spec.md](../doc/technical-spec.md)。
 
@@ -14,11 +14,13 @@ UI 只係顯示 backend 嘅 latest-state，唔會自己儲存或者計算資料�
 | `npm run build` | `tsc -b` 型別檢查 + `vite build` 輸出到 `dist/` |
 | `npm run preview` | 用 production build 喺 `http://localhost:4173` 預覽（同樣有 `/api` proxy） |
 | `npm run lint` | oxlint（包括 react hooks 同 jsx-a11y 規則） |
-| `npm test` | vitest：poller、pricePoller、狀態 reducer、flash、API client 同 table SSR；10 個 files／97 個測試 |
+| `npm test` | vitest：poller、pricePoller、狀態 reducer、flash、API client 同 price／news table SSR |
 
 Backend 要先行（`dotnet run`，預設 `http://localhost:5080`）；UI 會顯示「BACKEND DISCONNECTED」並自動重試，唔會白畫面。
 
 Grid 提供 server-side sorting／filters、技術欄位 visibility 同 CSV。Filter／sort／page-size 轉換會重設頁碼。Pause 只停價格自動刷新，health／sources monitoring 繼續；暫停時 query 改變仍查一次，Resume 即時刷新。CSV 係 request-time data，唔係 paused 畫面副本；Excel 匯入 INSTRUMENT 應選文字型別。格式、row cap 同使用限制見根目錄 README §12。
+
+EQUITIES／NEWS 可切換；news 用獨立 publication time、category、headline 同 details，冇 news CSV。新聞來源連線狀態同文章時間分開顯示。
 
 ## 設定
 

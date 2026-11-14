@@ -41,7 +41,7 @@ export function SourcePanel(props: SourcePanelProps) {
   return (
     <section className="panel sources" aria-labelledby="sources-title">
       <h2 id="sources-title" className="panel-title">
-        SOURCES
+        EQUITY PRICE SOURCES
       </h2>
       <div className="panel-scroll">
         <table className="grid grid-sources">

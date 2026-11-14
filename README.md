@@ -1,12 +1,15 @@
 # Trading Data Hub PoC（latest-state）
 
-一個喺個人電腦就可以獨立運行嘅 PoC：由多個來源收集價格，只保留「每個來源、每隻 instrument 嘅**最新狀態**」，
-經 REST API 同 Bloomberg Terminal-inspired 深色 dashboard 顯示，並用 checkpoint 檔案令 backend 重啟後唔使由零開始。
+一個喺個人電腦獨立運行嘅 multi-source、multi-model Trading Data Hub PoC。
+Equity latest-state prices 係第一個示範 data product，bounded recent news metadata cache 係第二個；
+經 REST API 同 terminal-inspired 深色 UI 顯示，並以 checkpoint 恢復快取。
 
 - 係 **latest-state Data Hub**，唔係歷史數據庫，亦唔係交易系統：冇 tick history、冇 audit trail、冇 order／position。
 - **所有來源都係 mock**：唔連任何真實外部服務（Solace、MSCI、Barra、MSSQL 全部冇連）。
 - 冇 Redis、PostgreSQL、Kafka 等額外基建：backend 用 in-memory store + 本機 checkpoint 檔案。
 - Prices grid 支援 server-side sorting／filters、Pause／Resume、技術欄位 visibility 同有 row cap 嘅 request-time CSV export。
+- News 使用獨立 schema、identity、publication time 同 retention；本階段只使用 synthetic mock，冇新聞 CSV。
+- Data product、source/provider 同 transport 係不同概念；Solace 係 transport。Barra risk／factor exposures、PnL 同 alpha signals 只係未來方向，**未實作**。
 - 技術設計、API 規格、恢復流程同限制嘅完整說明：[doc/technical-spec.md](doc/technical-spec.md)。
 
 > 實際執行過邊啲驗證、邊啲**未**驗證，見 [§14](#14-驗證狀態)；已知限制見 [§15](#15-已知限制)。
@@ -81,6 +84,10 @@ docker compose up --build -d
 - `CheckpointService` 定時（預設 30 秒）、手動、同 shutdown 時將 store 寫入本機檔案；`RecoveryHostedService` 喺 backend 開始接受請求之前讀返出嚟。
 - **恢復嘅舊數據唔會未同步就標示為 Live**：重啟後每個來源先係 `Recovering`，要該來源喺今次 process 完成 snapshot 先變 `Live`。
 - Frontend 預設每輪完成後等 1 秒（可設定）；grid 只讀一頁（最多 200 行），health／sources monitoring 同 prices display 分開。只有使用者明確點擊 CSV export，先另外下載受 row cap 限制嘅 Blob。
+- 獨立 `mock-news` 每 5 秒產生 synthetic metadata，經 native DTO → mapper → `NewsRecord` → API DTO；新聞唔使用 price snapshot、revision 或刪除語義。共用 header 只顯示 backend 連線狀態同時鐘；各產品來源狀態喺各自頁面顯示。
+- NEWS SOURCES 面板顯示 fetch 狀態、last attempt／success、cache 數量、最新已知 publication instant 同錯誤。`Outage 20s` 只係模擬失敗；20 秒後或按 `End outage` 後，等下一次 fetch（最多約 5 秒）成功才恢復 Connected。舊文章時間唔代表來源斷線。
+- News store key = `(SourceId, ArticleId)`，預設 `DataHub:News:MaxItems=500`、`RetentionDays=7`，以 first-seen 清理；有界 identity 記錄（最多 MaxItems）令已過期項目重複 fetch 唔會延長壽命，並保存到 checkpoint。大量新 identity 會淘汰最舊 identity 記錄；被遺忘後再次出現會視為新項目。列表缺席或 fetch 失敗唔刪除新聞。
+- Checkpoint schema 2 保存兩種產品；schema 1 價格檔可讀，news 從空開始。未知未來 schema 會顯示 warning 並阻止保存，避免覆蓋；恢復新聞在本次成功 fetch 前唔標示 Connected。
 
 ---
 
@@ -104,6 +111,7 @@ app-datahub-poc/
 │  │  ├─ Properties/launchSettings.json   F5／dotnet run 用嘅 profile（http://localhost:5080）
 │  │  ├─ Configuration/             DataHubOptions、DataHubOptionsValidator、JSON 設定
 │  │  ├─ Domain/                    PriceUpdate、PriceRecord、SourceStatus…
+│  │  ├─ News/                      synthetic native DTO、mapper、typed store、fetch status、API
 │  │  ├─ Sources/                   ISourceAdapter／ISourceCatalog；Mock/ 係 mock 實作
 │  │  ├─ Store/                     ILatestStateStore、LatestStateStore（in-memory）、PriceQueryEngine
 │  │  ├─ Sync/                      SourceRunner、SourceRegistry／SourceSupervisor、RecoveryHostedService、status 計算
@@ -111,7 +119,7 @@ app-datahub-poc/
 │  │  ├─ Endpoints/                 Minimal API + DTO、PriceReadService、query validation、CSV
 │  │  ├─ Hosting/                   DI 註冊、content root 判斷
 │  │  └─ Serialization/             UTC 時間 JSON converter
-│  └─ tests/DataHub.Api.Tests/      xUnit：Api/ Configuration/ Hosting/ Persistence/ Sources/ Store/ Sync/ Support/
+│  └─ tests/DataHub.Api.Tests/      xUnit：Api/ Configuration/ Hosting/ News/ Persistence/ Sources/ Store/ Sync/ Support/
 └─ frontend/
    ├─ package.json · vite.config.ts · .env.example · README.md
    ├─ Dockerfile · .dockerignore
@@ -204,7 +212,7 @@ npm test           # vitest：poller、狀態 reducer、API client、table SSR �
 
 | 區域 | 內容 |
 |---|---|
-| Header | `DATA HUB`、**MOCK** 標籤、`LIVE n/m`、backend 連線狀態（`BACKEND CONNECTED`／`DISCONNECTED`／`API ERROR`）、UTC 時鐘 |
+| Header | `DATA HUB`、**MOCK** 標籤、backend 連線狀態（`BACKEND CONNECTED`／`DISCONNECTED`／`API ERROR`）、UTC 時鐘；各產品來源狀態喺各自頁面顯示 |
 | Banners | `BACKEND UNREACHABLE`、`API ERROR`、`n OF m SOURCES NOT LIVE` |
 | Toolbar | 來源 filter、instrument 搜尋（contains，300 ms debounce）、`Refresh snapshot`、`Save checkpoint` |
 | Sources | 每個來源嘅 status、筆數、最後 snapshot／update、下次 snapshot、備註、`Outage 20s`（只限 mock） |
@@ -347,7 +355,7 @@ Container 內部（已喺 Dockerfile／`compose.yaml` 設定，一般唔使改�
 
 ## 10. Mock source 行為
 
-所有來源都喺 backend process 內模擬（`Sources/Mock/`），預設三個：
+所有來源都喺 backend process 內模擬；預設三個 price sources（`Sources/Mock/`），另有一個 `mock-news`：
 
 | SourceId | 類型 | Instruments | 更新節奏 | Snapshot 延遲 | 貨幣 | 小數位 |
 |---|---|---|---|---|---|---|
@@ -372,7 +380,7 @@ Container 內部（已喺 Dockerfile／`compose.yaml` 設定，一般唔使改�
 | 步驟 | 動作 | 預期 |
 |---|---|---|
 | 1 | 分別啟動 backend（Terminal 1）同 frontend（Terminal 2） | Backend log 見 `Starting 3 source runner(s)`；UI 開得到 |
-| 2 | 觀察 snapshot 數據同持續更新 | Header `LIVE 3/3`；三個來源筆數約 2000／1500／800（共約 4300 行）；價格格仔隨 polling 閃動 ▲／▼；`curl.exe http://localhost:5080/api/sources` 見 3 個 `Live` |
+| 2 | 觀察 snapshot 數據同持續更新 | EQUITY PRICE SOURCES 面板顯示三個來源 `LIVE`，筆數約 2000／1500／800（共約 4300 行）；價格格仔隨 polling 閃動 ▲／▼；`curl.exe http://localhost:5080/api/sources` 見 3 個 `Live` |
 | 3 | 手動保存 checkpoint：撳 **Save checkpoint**（或 `curl.exe -X POST http://localhost:5080/api/admin/checkpoint`） | Toolbar 顯示 `OK`；status bar **CHECKPOINT OK**（時間 · 筆數 · 大小 · 耗時）；`backend\src\DataHub.Api\data\checkpoints\checkpoint.json` 出現 |
 | 4 | **停止 backend**（Terminal 1 撳 Ctrl+C），frontend 繼續運行 | Backend log：`Final checkpoint on shutdown: Saved.` |
 | 5 | 睇 UI | 紅色 **BACKEND UNREACHABLE** banner、Header `BACKEND DISCONNECTED`；表格保留最後數據但變暗；每個來源同價格行嘅 status 改顯示 `DISCONNECTED`（滑鼠移上去嘅提示會寫 `Last known: LIVE`，並註明未能確認）；admin 按鈕停用；UI 持續重試 |
@@ -435,11 +443,18 @@ JSON 用 camelCase；enum 係 PascalCase 字串；時間一律 UTC（`…Z`）�
 | GET | `/api/prices` | Filter／sort 後分頁；`page` 預設 1，`pageSize` 預設 100、上限預設 500。每行帶 `sourceStatus`，回應帶符合來源／status filter 嘅來源 freshness |
 | GET | `/api/prices/export.csv` | 同一套 filter／sort，`scope=page`（預設）或 `scope=all`；超出 `Api:ExportMaxRows` → 422 `problem+json` |
 | GET | `/api/prices/{sourceId}/{instrumentId}` | 單一 record；未知來源或 instrument → 404 |
+| GET | `/api/news` | Bounded news cache；`page`、`pageSize`、`keyword`、`category`、`publishedFrom`、`publishedTo`、`sortDirection`；回應包括 news source fetch 狀態 |
 | POST | `/api/admin/snapshot/{sourceId}` | 即時重新攞 snapshot：200／404／409（已有 snapshot 運行中）／502（來源失敗） |
 | POST | `/api/admin/checkpoint` | 即時寫 checkpoint：200／409（忙緊、停用或冇資料）／500（寫入失敗） |
 | POST | `/api/admin/mock/{sourceId}/outage?seconds=N` | 模擬 mock 來源中斷（預設 20，範圍 0–3600，0 = 結束）；非 mock 來源 → 409 |
+| POST | `/api/admin/mock-news/outage?seconds=N` | 只模擬 synthetic news fetch 中斷，唔影響 prices |
 
 錯誤一律係 `application/problem+json`。`/api/admin/*` **冇認證**（PoC）；`DataHub__Api__AdminEnabled=false` 可以完全關閉。
+
+News keyword 係標題 contains、category 係不分大小寫精確匹配；日期使用 `yyyy-MM-dd` inclusive，
+instant 以 UTC 日期比較，date-only 保留原日期，未知日期不匹配日期範圍。Publication sort 預設 `desc`，
+未知時間兩個方向均排最後，同日按已知 instant 排序、再以 source／article ID 升序 tie-break；
+date-only 不會假裝成確切 instant。跨頁請求唔保證同一個 snapshot。
 
 ```powershell
 curl.exe http://localhost:5080/api/health
@@ -499,7 +514,14 @@ CNFIN news 嘅獨立調查見 [doc/cnfin-discovery.md](doc/cnfin-discovery.md)�
 
 ## 14. 驗證狀態
 
-以下只列**實際執行過**嘅項目。環境：Windows 開發機（PowerShell、Docker Desktop／Linux containers）；Node 24 嘅結果來自 `node:24-alpine` container。所有數字都係單次執行嘅觀察，唔係保證。
+以下舊記錄係先前文件記載，唔代表新電腦或今次修改已重新執行。今次實際驗證另見本次交付摘要；
+Node 24、Docker、Visual Studio F5 同舊 browser 驗證不可推論為今次通過。
+
+### Prompt 3（本機，2026-11-15）
+
+- .NET SDK 10.0.404：`dotnet build backend\DataHub.sln --no-restore` 成功，0 warning／error；`dotnet test backend\DataHub.sln --no-build --no-restore` 218／218 通過。
+- Windows Node v26.13.0／npm 11.20.0：在 `frontend` 執行 `npm run lint`、`npm test`、`npm run build`，lint 同 build 成功，12 files／101 tests 通過。
+- 獨立啟動 backend（checkpoint 停用）及 Vite，Playwright 檢查 EQUITIES／NEWS 切換、keyword、details、unknown/date-only 顯示；模擬 news outage 時 UI 顯示 disconnected 而 cache 保留，price sources 仍 3／3 live。停止測試服務後 browser polling 產生預期 connection-refused 訊息；未測完整無障礙、其他瀏覽器或新版本 Docker／F5。
 
 ### Prompt 2：grid 升級（2026-11-06）
 

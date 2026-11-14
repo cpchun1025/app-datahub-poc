@@ -259,4 +259,7 @@ export const api = {
       `/api/admin/mock/${encodeURIComponent(sourceId)}/outage?seconds=${seconds}`,
       { method: 'POST', signal, timeoutMs: ACTION_TIMEOUT_MS },
     ),
+  simulateNewsOutage: (seconds: number, signal: AbortSignal) =>
+    request<MockOutageResponse>(`/api/admin/mock-news/outage?seconds=${seconds}`,
+      { method: 'POST', signal, timeoutMs: ACTION_TIMEOUT_MS }),
 }

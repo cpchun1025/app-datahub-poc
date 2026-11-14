@@ -48,6 +48,15 @@
 - CNFIN 優先直接用 .NET adapter，唔需要另一個 microservice。
 - 唔新增 Redis、Kafka、database 或通用 plugin platform。
 - UI polling 唔可以直接觸發 external upstream requests。
+- 系統定位係 multi-source、multi-model Trading Data Hub：data product／model、
+  source system／provider 同 transport／ingestion mechanism 係不同概念；
+  Solace 係 transport，唔係產品模型。來源唔限於只提供一個 model。
+- 已實作 products 係 equity latest-state prices 同 bounded synthetic news metadata；
+  Barra risk／factor exposures、PnL 同 alpha signals 只係未來方向，
+  唔代表現已支援，亦唔建立空白 tabs、dummy endpoints 或通用 routing framework。
+- 各 product 自行定義 identity、validation、ordering、merge／removal、
+  retention 同 freshness；source fetch/connectivity health 要同記錄嘅
+  publication time／freshness／quality 分開。
 
 ### Engineering
 - Sorting/filtering 喺 backend 執行，然後 pagination。

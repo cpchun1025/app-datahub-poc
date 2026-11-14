@@ -1,5 +1,6 @@
 using DataHub.Api.Configuration;
 using DataHub.Api.Store;
+using DataHub.Api.News;
 using Microsoft.Extensions.Options;
 
 namespace DataHub.Api.Persistence;
@@ -56,18 +57,22 @@ public sealed class CheckpointService
     private readonly object _statusLock = new();
     private CheckpointStatus _status;
     private long _lastSavedVersion = -1;
+    private long _lastSavedNewsVersion = -1;
+    private readonly NewsStore? _news;
 
     public CheckpointService(
         ILatestStateStore store,
         ICheckpointStore fileStore,
         IOptions<DataHubOptions> options,
         TimeProvider time,
-        ILogger<CheckpointService> logger)
+        ILogger<CheckpointService> logger,
+        NewsStore? news = null)
     {
         _store = store;
         _fileStore = fileStore;
         _time = time;
         _logger = logger;
+        _news = news;
         Enabled = options.Value.Checkpoint.Enabled;
         _status = new CheckpointStatus { Enabled = Enabled };
     }
@@ -82,6 +87,7 @@ public sealed class CheckpointService
         if (load.Payload is not null && load.LoadedFrom == "primary")
         {
             Volatile.Write(ref _lastSavedVersion, storeVersion);
+            Volatile.Write(ref _lastSavedNewsVersion, _news?.Capture().Version ?? 0);
         }
 
         UpdateStatus(status => status with
@@ -112,14 +118,16 @@ public sealed class CheckpointService
         try
         {
             var capture = _store.Capture();
+            var news = _news?.Capture() ?? new NewsCapture(0, [], []);
 
             // 完全未有任何資料（未恢復、未 sync）就唔寫，避免用空檔案蓋走上一次嘅有效 checkpoint。
-            if (capture.Sources.All(source => source.RecordCount == 0 && source.LastSnapshotAtUtc is null))
+            if (news.Identities.Count == 0 && capture.Sources.All(source => source.RecordCount == 0 && source.LastSnapshotAtUtc is null))
             {
                 return new CheckpointRunResult(CheckpointOutcome.SkippedEmpty, Status);
             }
 
-            if (trigger != CheckpointTrigger.Manual && capture.Version == Volatile.Read(ref _lastSavedVersion))
+            if (trigger != CheckpointTrigger.Manual && capture.Version == Volatile.Read(ref _lastSavedVersion)
+                && news.Version == Volatile.Read(ref _lastSavedNewsVersion))
             {
                 return new CheckpointRunResult(CheckpointOutcome.SkippedUnchanged, Status);
             }
@@ -129,9 +137,11 @@ public sealed class CheckpointService
 
             try
             {
-                var payload = new CheckpointPayload(capture.Version, attemptedAt, capture.Sources);
+                var payload = new CheckpointPayload(capture.Version, attemptedAt, capture.Sources)
+                    { News = news.Items, NewsIdentities = news.Identities };
                 var result = await _fileStore.SaveAsync(payload, cancellationToken);
                 Volatile.Write(ref _lastSavedVersion, capture.Version);
+                Volatile.Write(ref _lastSavedNewsVersion, news.Version);
 
                 var savedAt = _time.GetUtcNow();
                 UpdateStatus(status => status with

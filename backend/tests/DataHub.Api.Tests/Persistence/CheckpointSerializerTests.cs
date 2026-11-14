@@ -131,9 +131,9 @@ public class CheckpointSerializerTests
     [Fact]
     public void Deserialize_RejectsAnUnsupportedSchemaVersion()
     {
-        var bytes = Envelope("[]", schemaVersion: 2);
+        var bytes = Envelope("[]", schemaVersion: CheckpointSerializer.SchemaVersion + 1);
 
-        var exception = Assert.Throws<CheckpointFormatException>(() => CheckpointSerializer.Deserialize(bytes));
+        var exception = Assert.Throws<FutureCheckpointFormatException>(() => CheckpointSerializer.Deserialize(bytes));
 
         Assert.Contains("schemaVersion", exception.Message, StringComparison.Ordinal);
     }

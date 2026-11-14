@@ -1,4 +1,5 @@
 using DataHub.Api.Store;
+using DataHub.Api.News;
 
 namespace DataHub.Api.Persistence;
 
@@ -9,6 +10,8 @@ public sealed record CheckpointPayload(
     IReadOnlyList<SourceData> Sources)
 {
     public long RecordCount => Sources.Sum(source => (long)source.RecordCount);
+    public IReadOnlyList<NewsRecord> News { get; init; } = [];
+    public IReadOnlyList<NewsIdentity> NewsIdentities { get; init; } = [];
 }
 
 public sealed record CheckpointLoadResult(
@@ -18,7 +21,10 @@ public sealed record CheckpointLoadResult(
 
 public sealed record CheckpointSaveResult(long Bytes, long RecordCount, TimeSpan Duration);
 
-public sealed class CheckpointFormatException(string message, Exception? inner = null) : Exception(message, inner);
+public class CheckpointFormatException(string message, Exception? inner = null) : Exception(message, inner);
+
+public sealed class FutureCheckpointFormatException(int version)
+    : CheckpointFormatException($"Unsupported future checkpoint schemaVersion {version}; saving is disabled to protect the file.");
 
 public interface ICheckpointStore
 {

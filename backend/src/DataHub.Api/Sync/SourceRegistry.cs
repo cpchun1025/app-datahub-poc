@@ -3,6 +3,7 @@ using DataHub.Api.Domain;
 using DataHub.Api.Persistence;
 using DataHub.Api.Sources;
 using DataHub.Api.Store;
+using DataHub.Api.News;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -57,7 +58,8 @@ public sealed class RecoveryHostedService(
     CheckpointService checkpoints,
     SourceRegistry registry,
     IOptions<DataHubOptions> options,
-    ILogger<RecoveryHostedService> logger) : IHostedService
+    ILogger<RecoveryHostedService> logger,
+    NewsStore? news = null) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -82,6 +84,7 @@ public sealed class RecoveryHostedService(
         var restoredRecords = 0L;
         if (load.Payload is not null)
         {
+            news?.Restore(load.Payload.News, load.Payload.NewsIdentities);
             foreach (var data in load.Payload.Sources)
             {
                 var runner = registry.Find(data.SourceId);
