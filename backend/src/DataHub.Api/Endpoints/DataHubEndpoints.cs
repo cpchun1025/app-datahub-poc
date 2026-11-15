@@ -44,6 +44,7 @@ public static class DataHubEndpoints
         api.MapGet("/prices", GetPrices)
             .WithName("GetPrices")
             .WithTags("Prices")
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .WithSummary("Server-side filtered, sorted and paginated latest prices from an immutable per-source view.")
             .WithDescription("sourceId filters one source (whole-id match, case-insensitive). instrumentId is a case-insensitive 'contains' search. "
                 + "currency is a case-insensitive exact code; sourceStatus is a named status; minPrice/maxPrice are inclusive. "
@@ -54,17 +55,21 @@ public static class DataHubEndpoints
         api.MapGet("/prices/export.csv", ExportPrices)
             .WithName("ExportPrices")
             .WithTags("Prices")
-            .Produces(StatusCodes.Status200OK, contentType: "text/csv")
-            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .Produces<string>(StatusCodes.Status200OK, contentType: "text/csv")
+            .ProducesValidationProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status422UnprocessableEntity)
             .WithSummary("Export request-time prices as UTF-8 BOM CSV, with the same filters and ordering as the table.")
             .WithDescription("scope=page (default) exports the requested page; scope=all ignores pagination. "
-                + "ExportMaxRows is enforced without truncation. Not a copy of a previously displayed or paused screen.");
+                + "Api:ExportMaxRows limits output rows (default 10000); excess returns 422 without truncation. "
+                + "UTF-8 BOM, CRLF and attachment filename; Cache-Control: no-store. "
+                + "Text cells may be prefixed with an apostrophe to prevent spreadsheet formulas. "
+                + "Not a copy of a previously displayed or paused screen; separate requests are not a shared snapshot.");
 
         api.MapGet("/prices/{sourceId}/{instrumentId}", GetPrice)
             .WithName("GetPrice")
             .WithTags("Prices")
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .WithSummary("Latest price of one instrument from one source (exact match).");
 
         if (options.Api.AdminEnabled)

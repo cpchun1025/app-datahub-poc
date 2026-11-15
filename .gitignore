@@ -21,3 +21,11 @@ dist/
 *.log
 .tmp-shots/
 .playwright-mcp/
+
+# Python client
+clients/python/**/__pycache__/
+clients/python/**/*.py[cod]
+clients/python/.pytest_cache/
+clients/python/.venv/
+clients/python/src/*.egg-info/
+clients/python/build/

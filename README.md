@@ -9,6 +9,7 @@ Equity latest-state prices 係第一個示範 data product，bounded recent news
 - 冇 Redis、PostgreSQL、Kafka 等額外基建：backend 用 in-memory store + 本機 checkpoint 檔案。
 - Prices grid 支援 server-side sorting／filters、Pause／Resume、技術欄位 visibility 同有 row cap 嘅 request-time CSV export。
 - News 使用獨立 schema、identity、publication time 同 retention；本階段只使用 synthetic mock，冇新聞 CSV。
+- 獨立 [Python reference client](clients/python/README.md) 只經 HTTP 讀取 prices、news 同來源狀態，毋須啟動 frontend。
 - Data product、source/provider 同 transport 係不同概念；Solace 係 transport。Barra risk／factor exposures、PnL 同 alpha signals 只係未來方向，**未實作**。
 - 技術設計、API 規格、恢復流程同限制嘅完整說明：[doc/technical-spec.md](doc/technical-spec.md)。
 
@@ -81,6 +82,7 @@ docker compose up --build -d
 - 每個來源有自己嘅 `SourceRunner`：先攞一次完整 snapshot，之後用 streaming／polling 更新最新值。一個來源失敗只影響佢自己嘅 status。
 - `LatestStateStore` 係 in-memory，key 係 `(SourceId, InstrumentId)`：**不同來源相同 InstrumentId 各自獨立，唔會互相覆蓋**（mock 三個來源都有 `MOCK00001`，價格同貨幣都唔同）。
 - API 只讀 store（讀取唔使攞 lock），唔會即時問來源。
+- Python reference client 同 browser 都係獨立 API consumers；client 不參與 ingestion，亦不讀 checkpoint。
 - `CheckpointService` 定時（預設 30 秒）、手動、同 shutdown 時將 store 寫入本機檔案；`RecoveryHostedService` 喺 backend 開始接受請求之前讀返出嚟。
 - **恢復嘅舊數據唔會未同步就標示為 Live**：重啟後每個來源先係 `Recovering`，要該來源喺今次 process 完成 snapshot 先變 `Live`。
 - Frontend 預設每輪完成後等 1 秒（可設定）；grid 只讀一頁（最多 200 行），health／sources monitoring 同 prices display 分開。只有使用者明確點擊 CSV export，先另外下載受 row cap 限制嘅 Blob。
@@ -120,6 +122,7 @@ app-datahub-poc/
 │  │  ├─ Hosting/                   DI 註冊、content root 判斷
 │  │  └─ Serialization/             UTC 時間 JSON converter
 │  └─ tests/DataHub.Api.Tests/      xUnit：Api/ Configuration/ Hosting/ News/ Persistence/ Sources/ Store/ Sync/ Support/
+├─ clients/python/                  可安裝 Python HTTP reference client、examples 同離線 tests
 └─ frontend/
    ├─ package.json · vite.config.ts · .env.example · README.md
    ├─ Dockerfile · .dockerignore
@@ -162,7 +165,7 @@ app-datahub-poc/
 ```powershell
 cd backend
 dotnet build DataHub.sln                       # warning 視為 error
-dotnet test DataHub.sln                        # 206 個測試
+dotnet test DataHub.sln                        # backend automated tests
 dotnet run --project src\DataHub.Api           # DataHub.Api profile：Development、http://localhost:5080
 ```
 
@@ -199,7 +202,7 @@ npm run dev        # http://localhost:5173；/api 由 Vite proxy 轉發去 http:
 npm run build      # tsc -b（型別檢查）+ vite build → dist/
 npm run preview    # 用 production build 喺 http://localhost:4173 預覽（同樣有 /api proxy）
 npm run lint       # oxlint
-npm test           # vitest：poller、狀態 reducer、API client、table SSR 等，97 個測試
+npm test           # vitest：poller、狀態 reducer、API client、table SSR 等
 ```
 
 - Backend 未啟動時，UI 唔會白畫面：會顯示 **BACKEND DISCONNECTED**／**BACKEND UNREACHABLE** 並自動重試，backend 返嚟就自動接返。
@@ -449,18 +452,30 @@ JSON 用 camelCase；enum 係 PascalCase 字串；時間一律 UTC（`…Z`）�
 | POST | `/api/admin/mock/{sourceId}/outage?seconds=N` | 模擬 mock 來源中斷（預設 20，範圍 0–3600，0 = 結束）；非 mock 來源 → 409 |
 | POST | `/api/admin/mock-news/outage?seconds=N` | 只模擬 synthetic news fetch 中斷，唔影響 prices |
 
-錯誤一律係 `application/problem+json`。`/api/admin/*` **冇認證**（PoC）；`DataHub__Api__AdminEnabled=false` 可以完全關閉。
+上述 API 產生嘅 validation／problem 錯誤使用 `application/problem+json`；validation 有 `errors`。
+`/api/admin/*` **冇認證**（PoC）；`DataHub__Api__AdminEnabled=false` 可以完全關閉。
 
 News keyword 係標題 contains、category 係不分大小寫精確匹配；日期使用 `yyyy-MM-dd` inclusive，
 instant 以 UTC 日期比較，date-only 保留原日期，未知日期不匹配日期範圍。Publication sort 預設 `desc`，
 未知時間兩個方向均排最後，同日按已知 instant 排序、再以 source／article ID 升序 tie-break；
 date-only 不會假裝成確切 instant。跨頁請求唔保證同一個 snapshot。
+News 無效 query 回 400 validation problem；成功 response 包括 `items`、分頁資料及 `source` fetch 狀態。
+OpenAPI `/openapi/v1.json` 描述 News query／response、Prices／CSV 錯誤及 CSV media type。
+
+價格喺 Backend 係 .NET `decimal`，System.Text.Json 寫成 JSON **number**，唔係 string。
+HTTP 測試確認 synthetic `117.60`、`0.0000000000000000000000000001`、
+`12345678901234567890.12345678` 同 `-12.50` 嘅原始 JSON 字面值保留數值及 scale；
+呢個唔代表所有 consumer 或後續計算都無損。JavaScript `number` 係 binary double，可能失去精度或 scale。
+Python 預設小數會先變 binary `float`：應對原始 JSON 用 `json.loads(body, parse_float=Decimal)`，
+唔好先轉 float 再轉 `Decimal`；冇小數點嘅 JSON number 會按預設解析為精確 `int`，
+需要統一為 `Decimal` 可對該整數轉換，或加 `parse_int=Decimal`（亦會影響分頁等整數欄位）。
 
 ```powershell
 curl.exe http://localhost:5080/api/health
 curl.exe "http://localhost:5080/api/prices?instrumentId=MOCK00001&pageSize=10"
 curl.exe "http://localhost:5080/api/prices?currency=EUR&sourceStatus=Live&minPrice=0&maxPrice=500&sortBy=price&sortDirection=desc&pageSize=25"
 curl.exe "http://localhost:5080/api/prices/export.csv?scope=all&instrumentId=MOCK00001&sortBy=price" --output prices.csv
+curl.exe "http://localhost:5080/api/news?category=Markets&pageSize=10&sortDirection=desc"
 curl.exe -X POST http://localhost:5080/api/admin/snapshot/mock-api-c
 ```
 
@@ -516,6 +531,9 @@ CNFIN news 嘅獨立調查見 [doc/cnfin-discovery.md](doc/cnfin-discovery.md)�
 
 以下舊記錄係先前文件記載，唔代表新電腦或今次修改已重新執行。今次實際驗證另見本次交付摘要；
 Node 24、Docker、Visual Studio F5 同舊 browser 驗證不可推論為今次通過。
+
+2026-11-16 API-first review follow-up 實際驗證及限制見
+[doc/api-first-review.md](doc/api-first-review.md) 的 Follow-up 區段。
 
 ### Prompt 3（本機，2026-11-15）
 

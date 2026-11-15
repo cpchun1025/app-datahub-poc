@@ -83,6 +83,7 @@ PoC 要驗證：
 | 本機檔案 checkpoint + 啟動恢復 | ［已實作］ |
 | Freshness／recovery 狀態（Initializing／Live／Recovering／Stale／Disconnected） | ［已實作］ |
 | REST API + OpenAPI | ［已實作］ |
+| 獨立 Python HTTP reference client（prices／news／source status） | ［已實作］；使用及本次驗證見 `clients/python/README.md` |
 | Server-side grid sorting／filters、技術欄 visibility、Pause／Resume、bounded CSV export | ［已實作］（Prompt 2） |
 | React dashboard、Dockerfiles、Docker Compose | ［已實作］ |
 | CNFIN news discovery／adapter | 調查完成；接入 blocked／未啟用（§12.1） |
@@ -187,6 +188,7 @@ flowchart LR
 - **寫入只經 `SourceRunner`（同 `RecoveryHostedService`）**：兩者都只喺記憶體操作，唔做 network／disk I/O；API 只讀。
 - **Checkpoint 係旁路**：由 `CheckpointService` 擷取 store 切面寫檔；啟動時由 `RecoveryHostedService` 讀返，恢復成「暫時顯示嘅舊數據」，要等來源重新同步先轉做 Live（§4.5）。
 - **Status 唔存喺 store**：由 `SourceRuntimeState` 喺讀取時用 `SourceStatusEvaluator` 即時推導，所以 stale 同斷線嘅判斷唔依賴任何事件發生。
+- 獨立 Python reference client（`clients/python/`）同 browser 都係 HTTP API consumers；client 不觸發外部 ingestion、不讀 checkpoint，亦不重做 freshness。它從原始 JSON number 解析 `Decimal`，對 price 多頁讀取要求明確上限；跨請求仍可能重複或遺漏，來源狀態與資料不是同一原子 snapshot。安裝、離線測試及 opt-in localhost smoke 見 [client README](../clients/python/README.md)。
 
 ### 3.2 組件一覽
 
@@ -755,8 +757,16 @@ Checkpoint 只係**加速恢復嘅本機快取**，唔係 source of truth。真�
 ### 8.1 慣例
 
 - Base URL：後端直接行係 `http://localhost:5080`；經 Docker 前端 nginx 係 `http://localhost:8080`（同源 `/api`）；Vite dev server 係 `http://localhost:5173`（proxy `/api`）。
-- JSON：camelCase；enum 以 PascalCase 字串（`"Live"`、`"Streaming"`）；時間一律 UTC（§4.2）；`decimal` 保留 scale（`117.60`）。
-- 錯誤一律係 RFC 7807 `application/problem+json`，帶 `type`、`title`、`status`、`detail`、`traceId`；validation 錯誤另有 `errors`。
+- JSON：camelCase；enum 以 PascalCase 字串（`"Live"`、`"Streaming"`）；時間一律 UTC（§4.2）。
+  價格係 .NET `decimal`，System.Text.Json 輸出 JSON number。HTTP 測試中 synthetic `117.60`、
+  `0.0000000000000000000000000001`、`12345678901234567890.12345678` 及 `-12.50` 嘅
+  原始 JSON 字面值保留數值及 scale；唔保證所有 client 或後續運算都無損。
+  JavaScript `number` 係 binary double，精度及 scale 可能丟失。
+  Python 應直接對原始 JSON 用 `json.loads(body, parse_float=Decimal)`（先 `from decimal import Decimal`），
+  不要先經 `float`；無小數點嘅數值預設係精確 `int`，可按欄位轉 `Decimal`，
+  或用 `parse_int=Decimal` 將所有整數（包括分頁欄位）轉為 `Decimal`。
+- API 明確產生嘅 validation／problem 錯誤用 `application/problem+json`，包含 ProblemDetails 欄位；
+  validation 另有 `errors`，實際可選欄位視乎錯誤而定。
 - 以下範例嘅**欄位同結構**取自實際執行嘅 response；數值同時間戳為示意。
 
 ### 8.2 Endpoint 一覽
@@ -769,13 +779,25 @@ Checkpoint 只係**加速恢復嘅本機快取**，唔係 source of truth。真�
 | GET | `/api/prices` | 分頁 latest price | 200 | 400、404 |
 | GET | `/api/prices/export.csv` | Request-time current-page／all-matching CSV | 200 | 400、404、422 |
 | GET | `/api/prices/{sourceId}/{instrumentId}` | 單一來源、單一 instrument | 200 | 404 |
+| GET | `/api/news` | Bounded news metadata、filter／sort／pagination 及 source fetch 狀態 | 200 | 400 |
 | POST | `/api/admin/snapshot/{sourceId}` | 手動 snapshot | 200 | 404、409、502 |
 | POST | `/api/admin/checkpoint` | 手動 checkpoint | 200 | 409、500 |
 | POST | `/api/admin/mock/{sourceId}/outage?seconds=N` | Mock 來源模擬中斷 | 200 | 400、404、409 |
+| POST | `/api/admin/mock-news/outage?seconds=N` | Synthetic news fetch 模擬中斷 | 200 | 400 |
 | GET | `/openapi/v1.json` | OpenAPI document（一律提供） | 200 | — |
 | GET | `/swagger` | Swagger UI（只喺 Development 或 `Api:SwaggerUiEnabled=true`） | 200 | — |
 
 `/api/admin/*` 只喺 `Api:AdminEnabled=true`（預設）時先有路由；關閉後回 404（`AdminRoutes_AreNotMappedWhenAdminIsDisabled`）。
+
+News `page` 預設 1，`pageSize` 預設及上限跟 `Api:DefaultPageSize`／`Api:MaxPageSize`；
+`keyword` 係不分大小寫 title contains，`category` 係不分大小寫精確匹配；
+`publishedFrom`／`publishedTo` 使用 inclusive `yyyy-MM-dd`，未知日期唔符合日期 filter。
+`sortDirection` 接受 case-sensitive `asc`／`desc`，缺省或空值為 `desc`，未知時間排最後，
+同日按已知 instant 排序再以 source／article ID 升序 tie-break；跨請求唔保證同一 snapshot。
+成功回 `items`、分頁資料及 `source` fetch 狀態；無效 query 回 400 validation problem。
+CSV 成功回 `text/csv; charset=utf-8`，UTF-8 BOM、CRLF、attachment 及 `Cache-Control: no-store`；
+`scope=all` 忽略分頁，輸出超過 `Api:ExportMaxRows` 回 422，不截斷；
+跨來源及跨請求唔保證全域 snapshot。OpenAPI 包含上述 query、response schema 及錯誤 media type。
 
 ### 8.3 Read endpoints
 
@@ -1113,7 +1135,7 @@ Client **必須**用以下欄位判斷數據係咪可信，而唔係只睇 `rece
 | `styles/` | `theme.css`（design tokens）、`app.css`（版面同組件樣式） |
 | `config.ts`、`main.tsx`、`App.tsx` | build-time 設定同 UI 常數；入口（`StrictMode` + `ErrorBoundary`）；頁面組合同 query／選取／頁碼 state |
 
-邏輯盡量放喺 `lib/`（polling 結果套用、flash 計算、格式化、狀態文字）。Frontend 嘅 **97 個測試**（vitest）涵蓋邏輯、`fetch` client 同 table React SSR markup；**冇用 DOM／jsdom**，畫面互動由 Playwright 驅動 Chromium 驗證（§11）。
+邏輯盡量放喺 `lib/`（polling 結果套用、flash 計算、格式化、狀態文字）。Frontend 的 vitest 測試涵蓋邏輯、`fetch` client 同 table React SSR markup；**冇用 DOM／jsdom**，過往畫面互動由 Playwright 驅動 Chromium 驗證（§11）。
 
 ### 9.2 Theme
 
@@ -1476,16 +1498,18 @@ Compose project 名係 `datahub-poc`，只有兩個 service，**冇 Redis／Post
 
 ## 11. 測試與驗證
 
-> 下列舊測試數字及操作紀錄屬先前版本，唔代表本次重新執行。Prompt 3 本機結果：.NET 10.0.404 build 成功、218 backend tests 通過；Node v26.13.0 frontend lint、101 tests、build 通過。Playwright 驗證 tabs、keyword、details 同 mock-news outage／cache，price sources 繼續 Live；服務停止後有預期 connection-refused。Docker、Node 24、F5、全面 accessibility／其他瀏覽器未於本次驗證。
+> 下列舊測試數字及操作紀錄屬先前版本，唔代表本次重新執行。2026-11-15 Prompt 3 本機結果：.NET 10.0.404 build 成功、218 backend tests 通過；Node v26.13.0 frontend lint、101 tests、build 通過。Playwright 驗證 tabs、keyword、details 同 mock-news outage／cache，price sources 繼續 Live；服務停止後有預期 connection-refused。2026-11-16 API-first review follow-up 實際驗證見 [api-first-review.md](api-first-review.md)；Docker、Node 24、F5、全面 accessibility／其他瀏覽器未於本次驗證。
 
 ### 11.1 自動化測試範圍
 
-**Backend**（`backend/tests/DataHub.Api.Tests/`，xUnit 2.9.3）：目前 **218 個 test case**（包括 `[Theory]` 資料列展開）；包括 news mapper、retention、checkpoint、API 同 outage regression。
+**Backend**（`backend/tests/DataHub.Api.Tests/`，xUnit）：包括 news mapper、retention、checkpoint、HTTP API 同 outage regression。
 
 - 多數時間相關測試用 `FakeTimeProvider` 驅動；news outage integration 測試等待實際 mock fetch 週期。
 - API 測試用 `WebApplicationFactory<Program>`（`Support/DataHubFactory.cs`）喺 process 內起完整 host（TestServer，唔開真實 port），經 `HttpClient` 行完整 ASP.NET Core pipeline；檔案系統測試用臨時目錄（`Support/TempDirectory.cs`），測完刪除；mock upstream 用固定 `Seed`，結果可重現。
 
-| 範圍 | Test class（method 數） | 重點 |
+以下 class method 數係 2026-11-06 歷史快照，唔係現時計數。
+
+| 範圍 | Test class（當時 method 數） | 重點 |
 |---|---|---|
 | Store | `LatestStateStoreTests`（20） | 「最新值贏」（100 → 101 → 100 最後係 100）；舊或重複 revision 忽略、同一 batch 內亂序；**相同 `InstrumentId` 喺唔同來源唔互相覆蓋**、跨來源 revision 唔比較；snapshot merge／replace 嘅成員增減、snapshot 唔蓋走較新 update、遲到嘅舊 update 唔可以令已移除成員復活；分頁排序穩定；`Capture` 係穩定切面；多個 task 同時寫入同讀取 |
 | Grid query | `PriceQueryEngineTests`（7） | 跨頁 numeric asc／desc、全部 sort fields、固定 tie-breaker、null-last、filters／count；export cap、immutable capture、cancellation；同一 request 只取一次狀態評估時間 |
@@ -1497,9 +1521,9 @@ Compose project 名係 `datahub-poc`，只有兩個 service，**冇 Redis／Post
 | Mock upstream | `MockUpstreamTests`（12） | 固定 seed 可重現；revision 嚴格遞增；poll 只回 cursor 之後嘅變動；subscriber 按序收到每個 tick；**下市喺 stream 冇通知，只喺下一個 snapshot 見到**；outage 令所有操作失敗並令 subscriber 出錯，可以準時結束或者提早清除；snapshot latency 期間 upstream 繼續變動；慢 subscriber 被丟棄而唔拖慢 upstream；catalog 按設定建立對應 kind 並標示 mock |
 | Configuration／hosting | `DataHubOptionsValidatorTests`（7）、`ContentRootResolverTests`（4） | 每個無效設定都被拒並指明設定名、一次列出所有問題；停用 checkpoint 時唔驗證其設定；`StaleAfterSeconds=0` 合法；**隨附嘅 `appsettings.json` 本身有效**；content root 判斷（§10.3） |
 
-**Frontend**（`frontend/src/**/*.test.{ts,tsx}`，vitest 5.1.0，`environment: 'node'`）：10 個 test file、**97 個測試**。
+**Frontend**（`frontend/src/**/*.test.{ts,tsx}`，`environment: 'node'`）：以下係 2026-11-06 歷史快照（10 個 test file、97 個測試），唔係目前總數；測試範圍包括 news、client、poller 同 React SSR。
 
-| File | 測試數 | 重點 |
+| File | 當時測試數 | 重點 |
 |---|---|---|
 | `api/client.test.ts` | 24 | Network／gateway／problem 錯誤分類、validation、body 讀唔到、取消／逾時；query 編碼（decimal bounds 保留字串）、page／all export URL、CSV Blob、422 唔當下載；admin route／`describeApiError` |
 | `lib/dataHubState.test.ts` | 15 | Connecting／connected／disconnected、保留最後數據／error、query 改變唔 flash、重連清 baseline；paused monitoring 繼續反映斷線，未請求 prices 唔清 query／last refresh；price-only 錯誤唔取代 monitoring 狀態 |

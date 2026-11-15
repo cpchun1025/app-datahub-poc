@@ -165,8 +165,27 @@ public class NewsTests
         Assert.Equal("news-1", Assert.Single(filtered!.Items).ArticleId);
         var ascending = await client.GetFromJsonAsync<NewsListResponse>("/api/news?sortDirection=asc", DataHubJson.CreateOptions());
         Assert.Equal(["news-2", "news-1", "news-3"], ascending!.Items.Select(x => x.ArticleId));
+        var emptyFilters = await client.GetFromJsonAsync<NewsListResponse>(
+            "/api/news?keyword=&category=&sortDirection=", DataHubJson.CreateOptions());
+        Assert.Equal(["news-1", "news-2", "news-3"], emptyFilters!.Items.Select(x => x.ArticleId));
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/api/news?publishedFrom=bad")).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/api/news?page=0")).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("page=", "page")]
+    [InlineData("page=1&page=2", "page")]
+    [InlineData("pageSize=501", "pageSize")]
+    [InlineData("publishedFrom=", "publishedFrom")]
+    [InlineData("publishedFrom=2026-02-01&publishedTo=2026-01-01", "publishedTo")]
+    [InlineData("sortDirection=DESC", "sortDirection")]
+    public async Task ApiInvalidQueriesReturnValidationProblem(string query, string field)
+    {
+        using var directory = new TempDirectory();
+        await using var factory = new DataHubFactory(null, directory.FullPath);
+        var problem = (await factory.Api.GetReplyAsync("/api/news?" + query)).ExpectProblem(HttpStatusCode.BadRequest);
+        Assert.Equal(400, problem.Status);
+        Assert.Contains(field, problem.Errors!.Keys);
     }
 
     [Fact]

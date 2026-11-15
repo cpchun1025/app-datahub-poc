@@ -256,6 +256,41 @@ public class ApiReadTests(LiveApiFixture api) : IClassFixture<LiveApiFixture>
     }
 
     [Fact]
+    public async Task PriceJson_PreservesRepresentativeDecimalValuesAndScaleOnTheWire()
+    {
+        using var checkpoints = new TempDirectory();
+        var source = new FakeStreamingAdapter("precision");
+        source.Upstream.Set("SCALE", 117.60m);
+        source.Upstream.Set("SMALL", 0.0000000000000000000000000001m);
+        source.Upstream.Set("LARGE", 12345678901234567890.12345678m);
+        source.Upstream.Set("NEGATIVE", -12.50m);
+        await using var factory = new DataHubFactory(new FakeCatalog(source), checkpoints.FullPath);
+        var client = factory.Api;
+        await client.WaitForLiveAsync("precision");
+
+        var expected = new Dictionary<string, string>
+        {
+            ["SCALE"] = "117.60",
+            ["SMALL"] = "0.0000000000000000000000000001",
+            ["LARGE"] = "12345678901234567890.12345678",
+            ["NEGATIVE"] = "-12.50",
+        };
+        using var list = JsonDocument.Parse((await client.GetReplyAsync("/api/prices?sourceId=precision"))
+            .Expect(HttpStatusCode.OK).Body);
+        foreach (var row in list.RootElement.GetProperty("items").EnumerateArray())
+        {
+            var id = row.GetProperty("instrumentId").GetString()!;
+            var price = row.GetProperty("price");
+            Assert.Equal(JsonValueKind.Number, price.ValueKind);
+            Assert.Equal(expected[id], price.GetRawText());
+            using var detail = JsonDocument.Parse((await client.GetReplyAsync($"/api/prices/precision/{id}"))
+                .Expect(HttpStatusCode.OK).Body);
+            Assert.Equal(expected[id], detail.RootElement.GetProperty("price").GetRawText());
+        }
+        Assert.Equal(expected.Count, list.RootElement.GetProperty("items").GetArrayLength());
+    }
+
+    [Fact]
     public async Task OpenApiDocument_DescribesTheEndpoints()
     {
         var reply = (await Client.GetReplyAsync("/openapi/v1.json")).Expect(HttpStatusCode.OK);
@@ -275,6 +310,79 @@ public class ApiReadTests(LiveApiFixture api) : IClassFixture<LiveApiFixture>
             "/api/admin/mock/{sourceId}/outage",
         ];
         Assert.Empty(expected.Except(paths));
+    }
+
+    [Fact]
+    public async Task OpenApi_DescribesNewsAndPriceExportResponsesAndErrors()
+    {
+        using var document = JsonDocument.Parse((await Client.GetReplyAsync("/openapi/v1.json"))
+            .Expect(HttpStatusCode.OK).Body);
+        var root = document.RootElement;
+        var paths = root.GetProperty("paths");
+        var news = paths.GetProperty("/api/news").GetProperty("get");
+        var parameters = news.GetProperty("parameters").EnumerateArray().ToArray();
+        Assert.Equal(
+            ["category", "keyword", "page", "pageSize", "publishedFrom", "publishedTo", "sortDirection"],
+            parameters.Select(parameter => parameter.GetProperty("name").GetString()).Order(StringComparer.Ordinal));
+        Assert.All(parameters, parameter =>
+        {
+            Assert.Equal("query", parameter.GetProperty("in").GetString());
+            Assert.False(parameter.TryGetProperty("required", out var required) && required.GetBoolean());
+            Assert.Equal("string", parameter.GetProperty("schema").GetProperty("type").GetString());
+        });
+
+        var newsSchema = ResponseSchema(news, "200", "application/json");
+        Assert.Equal("#/components/schemas/NewsListResponse", newsSchema.GetProperty("$ref").GetString());
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        var newsProperties = schemas.GetProperty("NewsListResponse").GetProperty("properties");
+        Assert.Equal("#/components/schemas/NewsDto",
+            newsProperties.GetProperty("items").GetProperty("items").GetProperty("$ref").GetString());
+        Assert.Equal("#/components/schemas/NewsStatus", newsProperties.GetProperty("source").GetProperty("$ref").GetString());
+        var itemProperties = schemas.GetProperty("NewsDto").GetProperty("properties");
+        foreach (var name in new[] { "sourceId", "articleId", "publishedAtUtc", "publishedDate", "publicationTimePrecision",
+                     "firstSeenAtUtc", "fetchedAtUtc", "mappingWarnings" })
+            Assert.True(itemProperties.TryGetProperty(name, out _), $"Missing news property {name}");
+        Assert.Equal("string", itemProperties.GetProperty("firstSeenAtUtc").GetProperty("type").GetString());
+        Assert.Equal("date-time", itemProperties.GetProperty("firstSeenAtUtc").GetProperty("format").GetString());
+        Assert.Equal(["null", "string"], itemProperties.GetProperty("publishedAtUtc").GetProperty("type")
+            .EnumerateArray().Select(value => value.GetString()).Order(StringComparer.Ordinal));
+        Assert.Equal("date-time", itemProperties.GetProperty("publishedAtUtc").GetProperty("format").GetString());
+        Assert.Equal("#/components/schemas/PublicationTimePrecision",
+            itemProperties.GetProperty("publicationTimePrecision").GetProperty("$ref").GetString());
+        Assert.Equal("array", itemProperties.GetProperty("mappingWarnings").GetProperty("type").GetString());
+        var precisionSchema = schemas.GetProperty("PublicationTimePrecision");
+        Assert.Equal(["Date", "Instant", "Unknown"], precisionSchema.GetProperty("enum").EnumerateArray()
+            .Select(value => value.GetString()).Order(StringComparer.Ordinal));
+        Assert.True(schemas.GetProperty("NewsStatus").GetProperty("properties").TryGetProperty("state", out _));
+        foreach (var name in new[] { "type", "title", "status", "detail", "instance" })
+            Assert.True(schemas.GetProperty("ProblemDetails").GetProperty("properties").TryGetProperty(name, out _));
+        Assert.True(schemas.GetProperty("HttpValidationProblemDetails").GetProperty("properties")
+            .TryGetProperty("errors", out _));
+        AssertValidationResponse(news);
+
+        var prices = paths.GetProperty("/api/prices").GetProperty("get");
+        AssertValidationResponse(prices);
+        AssertProblemResponse(prices, "404");
+        AssertProblemResponse(paths.GetProperty("/api/prices/{sourceId}/{instrumentId}").GetProperty("get"), "404");
+
+        var csv = paths.GetProperty("/api/prices/export.csv").GetProperty("get");
+        Assert.Equal("string", ResponseSchema(csv, "200", "text/csv").GetProperty("type").GetString());
+        AssertValidationResponse(csv);
+        AssertProblemResponse(csv, "404");
+        AssertProblemResponse(csv, "422");
+        Assert.Contains("ExportMaxRows", csv.GetProperty("description").GetString());
+
+        static JsonElement ResponseSchema(JsonElement operation, string status, string mediaType)
+            => operation.GetProperty("responses").GetProperty(status).GetProperty("content")
+                .GetProperty(mediaType).GetProperty("schema");
+
+        static void AssertValidationResponse(JsonElement operation)
+            => Assert.Equal("#/components/schemas/HttpValidationProblemDetails",
+                ResponseSchema(operation, "400", "application/problem+json").GetProperty("$ref").GetString());
+
+        static void AssertProblemResponse(JsonElement operation, string status)
+            => Assert.Equal("#/components/schemas/ProblemDetails",
+                ResponseSchema(operation, status, "application/problem+json").GetProperty("$ref").GetString());
     }
 
     [Fact]

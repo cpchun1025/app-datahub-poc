@@ -9,6 +9,7 @@ using DataHub.Api.Sync;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 
 namespace DataHub.Api.Hosting;
 
@@ -63,6 +64,15 @@ public static class ServiceCollectionExtensions
 
         services.AddOpenApi("v1", options =>
         {
+            options.AddSchemaTransformer((schema, context, _) =>
+            {
+                var type = context.JsonTypeInfo.Type;
+                if (type == typeof(DateTimeOffset))
+                    schema.Type = JsonSchemaType.String;
+                else if (type == typeof(DateTimeOffset?))
+                    schema.Type = JsonSchemaType.String | JsonSchemaType.Null;
+                return Task.CompletedTask;
+            });
             options.AddDocumentTransformer((document, _, _) =>
             {
                 document.Info = new()
