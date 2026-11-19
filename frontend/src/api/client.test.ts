@@ -191,6 +191,19 @@ describe('api admin calls', () => {
     ])
   })
 
+  describe('instrument detail calls', () => {
+    it('uses the instrument identity path and bounded page query for both datasets', async () => {
+      const fetchMock = stubFetch(async () => json({}))
+      await api.instrument('hk 0005', 2, 10, signal())
+      await api.memberships('hk 0005', 3, 10, signal())
+
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        '/api/instruments/hk%200005?page=2&pageSize=10',
+        '/api/instruments/hk%200005/memberships?page=3&pageSize=10',
+      ])
+    })
+  })
+
   describe('grid queries and CSV', () => {
     const query: PriceQuery = {
       sourceId: 'alpha', instrument: 'A&B', page: 3, pageSize: 25, sortBy: 'price', sortDirection: 'desc',

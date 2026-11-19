@@ -22,7 +22,7 @@ public sealed partial class DataHubOptionsValidator : IValidateOptions<DataHubOp
 
         if (!options.UseMockSources)
         {
-            failures.Add("DataHub:UseMockSources=false：呢個 PoC 只實作 mock sources，真實 adapter 需要自行註冊（見 README 嘅 extension points）。");
+            failures.Add("DataHub:UseMockSources=false：mock sources 仍然係必需；opt-in CSV showcase 係 synthetic，唔係真實 source。");
         }
 
         if (!Positive(options.Snapshot.IntervalHours, MaxSnapshotIntervalHours))
@@ -58,8 +58,34 @@ public sealed partial class DataHubOptionsValidator : IValidateOptions<DataHubOp
             failures.Add("DataHub:News:RetentionDays 必須介乎 1 至 3650。");
 
         ValidateMockSources(options.Mock, failures);
+        ValidateCsvShowcase(options.CsvShowcase, options.Mock, failures);
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
+    }
+
+    private static void ValidateCsvShowcase(CsvShowcaseOptions csv, MockOptions mock, List<string> failures)
+    {
+        if (!csv.Enabled) return;
+
+        var spotSourceId = csv.SpotSourceId ?? string.Empty;
+        var compositionSourceId = csv.CompositionSourceId ?? string.Empty;
+        if (!SourceIdPattern().IsMatch(spotSourceId) || !SourceIdPattern().IsMatch(compositionSourceId))
+            failures.Add("DataHub:CsvShowcase source IDs must use lowercase letters, digits, '.', '_' or '-' (max 64 chars).");
+        if (string.Equals(spotSourceId, compositionSourceId, StringComparison.OrdinalIgnoreCase)
+            || mock.Sources.Any(source => string.Equals(source.SourceId, spotSourceId, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(source.SourceId, compositionSourceId, StringComparison.OrdinalIgnoreCase)))
+            failures.Add("DataHub:CsvShowcase source IDs must be unique and must not collide with mock sources.");
+        if (string.IsNullOrWhiteSpace(csv.SpotDisplayName) || string.IsNullOrWhiteSpace(csv.SpotPath)
+            || string.IsNullOrWhiteSpace(csv.CompositionPath))
+            failures.Add("DataHub:CsvShowcase requires SpotDisplayName, SpotPath and CompositionPath.");
+        if (!Positive(csv.PollIntervalSeconds, 86_400))
+            failures.Add("DataHub:CsvShowcase:PollIntervalSeconds must be positive and at most one day.");
+        if (csv.MaxFileBytes is < 1 or > 100_000_000)
+            failures.Add("DataHub:CsvShowcase:MaxFileBytes must be between 1 and 100000000.");
+        if (csv.MaxRows is < 1 or > 1_000_000)
+            failures.Add("DataHub:CsvShowcase:MaxRows must be between 1 and 1000000.");
+        if (csv.MaxFieldLength is < 1 or > 16_384)
+            failures.Add("DataHub:CsvShowcase:MaxFieldLength must be between 1 and 16384.");
     }
 
     private static void ValidateMockSources(MockOptions mock, List<string> failures)

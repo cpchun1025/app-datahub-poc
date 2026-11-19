@@ -1,4 +1,5 @@
 using DataHub.Api.Configuration;
+using DataHub.Api.Csv;
 using DataHub.Api.Domain;
 using DataHub.Api.Sources;
 using DataHub.Api.Store;
@@ -123,6 +124,7 @@ public sealed class SourceRunner
 
         var isStreaming = _adapter is IStreamingSourceAdapter;
         var isPolling = _adapter is IPollingSourceAdapter;
+        var isCsv = _adapter is ICsvSnapshotSourceAdapter;
         var generationAtStart = Interlocked.Read(ref _feedGeneration);
         var startedAt = _time.GetUtcNow();
         Runtime.Update(state => state with { SnapshotInProgress = true, LastSnapshotAttemptAtUtc = startedAt });
@@ -131,7 +133,11 @@ public sealed class SourceRunner
         {
             var snapshot = await _adapter.GetSnapshotAsync(cancellationToken);
             var appliedAt = _time.GetUtcNow();
-            var applied = ApplySnapshot(snapshot, appliedAt);
+            var applied = snapshot.UnchangedContent
+                ? new SnapshotApplyResult(0, 0, 0, 0, _store.GetSource(SourceId)?.RecordCount ?? 0, Skipped: true)
+                : ApplySnapshot(snapshot, appliedAt);
+            if (isCsv)
+                ((ICsvSnapshotSourceAdapter)_adapter).ConfirmSnapshot(snapshot, appliedAt);
             if (isPolling)
             {
                 AdvancePollCursor(snapshot.Revision);
@@ -146,19 +152,21 @@ public sealed class SourceRunner
                     SyncedSinceStart = true,
                     SnapshotInProgress = false,
                     ResyncPending = resyncStillPending,
-                    FeedConnected = isPolling || state.FeedConnected,
-                    LastFeedActivityAtUtc = isPolling ? appliedAt : state.LastFeedActivityAtUtc,
+                    FeedConnected = isPolling || isCsv || state.FeedConnected,
+                    LastFeedActivityAtUtc = isPolling || isCsv ? appliedAt : state.LastFeedActivityAtUtc,
                     ConsecutiveSnapshotFailures = 0,
                     LastSnapshotError = null,
                     LastSnapshotErrorAtUtc = null,
-                    NextSnapshotDueAtUtc = resyncStillPending ? appliedAt : appliedAt + _options.Snapshot.Interval,
+                    NextSnapshotDueAtUtc = resyncStillPending ? appliedAt
+                        : appliedAt + (isCsv ? ((ICsvSnapshotSourceAdapter)_adapter).PollInterval : _options.Snapshot.Interval),
                 };
             });
 
             _logger.LogInformation(
                 "{SourceId}: snapshot applied ({Trigger}) revision={Revision} added={Added} updated={Updated} removed={Removed} keptNewer={KeptNewer} total={Total}{Skipped}",
                 SourceId, trigger, snapshot.Revision, applied.Added, applied.Updated, applied.Removed, applied.KeptNewer, applied.TotalRecords,
-                applied.Skipped ? " (skipped: older than current floor)" : string.Empty);
+                snapshot.UnchangedContent ? " (unchanged content)"
+                    : applied.Skipped ? " (skipped: older than current floor)" : string.Empty);
 
             return new SnapshotRefreshResult(SnapshotRefreshOutcome.Succeeded, SourceId, applied);
         }
@@ -411,8 +419,14 @@ public sealed class SourceRunner
             return TimeSpan.Zero;
         }
 
-        return _adapter is IPollingSourceAdapter polling
-            ? TimeSpan.FromTicks(Math.Max(configured.Ticks, polling.PollInterval.Ticks * 3))
+        var interval = _adapter switch
+        {
+            IPollingSourceAdapter polling => polling.PollInterval,
+            ICsvSnapshotSourceAdapter csv => csv.PollInterval,
+            _ => TimeSpan.Zero,
+        };
+        return interval > TimeSpan.Zero
+            ? TimeSpan.FromTicks(Math.Max(configured.Ticks, interval.Ticks * 3))
             : configured;
     }
 

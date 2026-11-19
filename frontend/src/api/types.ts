@@ -1,7 +1,8 @@
 // 對應 backend DataHub.Api.Endpoints.Dtos。JSON 係 camelCase、enum 係字串、時間係 UTC ISO-8601（結尾 Z）。
 
 export type SourceStatus = 'Initializing' | 'Live' | 'Recovering' | 'Stale' | 'Disconnected'
-export type SourceKind = 'Streaming' | 'Polling'
+export type SourceKind = 'Streaming' | 'Polling' | 'Csv'
+export type PriceKind = 'Last'
 
 export interface PriceDto {
   sourceId: string
@@ -12,6 +13,9 @@ export interface PriceDto {
   receivedAtUtc: string
   sourceRevision: number
   sourceStatus: SourceStatus
+  isSynthetic?: boolean
+  providerSymbol?: string | null
+  priceKind?: PriceKind | null
 }
 
 export interface SourceFreshnessDto {
@@ -36,6 +40,7 @@ export interface SourceDto {
   displayName: string
   kind: SourceKind
   isMock: boolean
+  isSynthetic?: boolean
   description: string
   priceDecimals: number
   status: SourceStatus
@@ -49,6 +54,63 @@ export interface SourceDto {
   nextSnapshotDueAtUtc: string | null
   lastError: string | null
   lastErrorAtUtc: string | null
+  csvImport?: CsvImportStatusDto | null
+}
+
+export interface CsvImportStatusDto {
+  lastFileCheckAtUtc: string | null
+  lastSuccessfulValidationAtUtc: string | null
+  lastDataImportAtUtc: string | null
+  fingerprint: string | null
+  rowCount: number
+  errorCount: number
+  lastError: string | null
+}
+
+export interface InstrumentObservationDto {
+  sourceId: string
+  displayName: string
+  instrumentId: string
+  providerSymbol: string | null
+  price: number
+  currency: string
+  sourceUpdatedAtUtc: string
+  receivedAtUtc: string
+  priceKind: PriceKind | null
+  sourceStatus: SourceStatus
+  isSynthetic: boolean
+}
+
+export interface InstrumentDetailResponse {
+  instrumentId: string
+  serverTimeUtc: string
+  page: number
+  pageSize: number
+  totalCount: number
+  totalPages: number
+  observations: InstrumentObservationDto[]
+}
+
+export interface IndexMembershipDto {
+  sourceId: string
+  indexId: string
+  instrumentId: string
+  weight: number
+  effectiveDate: string
+}
+
+export interface InstrumentMembershipResponse {
+  instrumentId: string
+  serverTimeUtc: string
+  sourceId: string
+  sourceStatus: string
+  lastSuccessfulValidationAtUtc: string | null
+  lastError: string | null
+  page: number
+  pageSize: number
+  totalCount: number
+  totalPages: number
+  items: IndexMembershipDto[]
 }
 
 export interface SourceListResponse {

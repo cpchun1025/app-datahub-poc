@@ -259,7 +259,9 @@ public sealed class LatestStateStore : ILatestStateStore
             update.Currency,
             update.SourceUpdatedAtUtc.ToUniversalTime(),
             receivedAtUtc.ToUniversalTime(),
-            update.Revision);
+            update.Revision,
+            update.ProviderSymbol,
+            update.PriceKind);
 
     private readonly record struct MergeOutcome(
         ImmutableSortedDictionary<string, PriceRecord> Records,

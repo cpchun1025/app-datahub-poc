@@ -9,7 +9,7 @@ public sealed class DataHubOptions
 {
     public const string SectionName = "DataHub";
 
-    /// <summary>PoC 只實作 mock sources；設為 false 會喺啟動時報錯，真實 adapter 要自行註冊（見 README 嘅 extension points）。</summary>
+    /// <summary>Mock sources 仍然係必需；false 暫不支援。Optional CSV showcase 係 synthetic，唔係真實來源。</summary>
     public bool UseMockSources { get; set; } = true;
 
     public SnapshotOptions Snapshot { get; set; } = new();
@@ -18,6 +18,22 @@ public sealed class DataHubOptions
     public ApiOptions Api { get; set; } = new();
     public MockOptions Mock { get; set; } = new();
     public NewsOptions News { get; set; } = new();
+    public CsvShowcaseOptions CsvShowcase { get; set; } = new();
+}
+
+public sealed class CsvShowcaseOptions
+{
+    public bool Enabled { get; set; }
+    public string SpotSourceId { get; set; } = "demo-csv";
+    public string SpotDisplayName { get; set; } = "Synthetic CSV spot demo";
+    public string? SpotPath { get; set; }
+    public string CompositionSourceId { get; set; } = "demo-composition";
+    public string? CompositionPath { get; set; }
+    public double PollIntervalSeconds { get; set; } = 5;
+    public int MaxFileBytes { get; set; } = 2_000_000;
+    public int MaxRows { get; set; } = 10_000;
+    public int MaxFieldLength { get; set; } = 256;
+    public bool AllowEmptySnapshot { get; set; }
 }
 
 public sealed class NewsOptions

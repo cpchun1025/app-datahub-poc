@@ -2,6 +2,8 @@ import { config } from '../config'
 import type {
   CheckpointRunResponse,
   HealthResponse,
+  InstrumentDetailResponse,
+  InstrumentMembershipResponse,
   MockOutageResponse,
   PriceListResponse,
   ProblemDetails,
@@ -239,6 +241,22 @@ export const api = {
 
   prices: (query: PriceQuery, signal: AbortSignal, timeoutMs?: number) =>
     request<PriceListResponse>(buildPricesPath(query), { signal, timeoutMs }),
+
+  instrument: (instrumentId: string, page: number, pageSize: number, signal: AbortSignal) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    return request<InstrumentDetailResponse>(
+      `/api/instruments/${encodeURIComponent(instrumentId)}?${params}`,
+      { signal },
+    )
+  },
+
+  memberships: (instrumentId: string, page: number, pageSize: number, signal: AbortSignal) => {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    return request<InstrumentMembershipResponse>(
+      `/api/instruments/${encodeURIComponent(instrumentId)}/memberships?${params}`,
+      { signal },
+    )
+  },
 
   refreshSnapshot: (sourceId: string, signal: AbortSignal) =>
     request<SnapshotRefreshResponse>(`/api/admin/snapshot/${encodeURIComponent(sourceId)}`, {

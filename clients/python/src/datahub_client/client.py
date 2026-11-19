@@ -124,6 +124,32 @@ def _page(value: Any, item_parser: Any) -> dict[str, Any]:
     return page
 
 
+def _instrument_observation(value: Any) -> dict[str, Any]:
+    item = _object(value, "Instrument observation")
+    for name in ("sourceId", "displayName", "instrumentId", "currency", "sourceUpdatedAtUtc",
+                 "receivedAtUtc", "sourceStatus"):
+        _field(item, name, str)
+    _field(item, "providerSymbol", str, nullable=True)
+    _field(item, "priceKind", str, nullable=True)
+    _field(item, "isSynthetic", bool)
+    price = item.get("price")
+    if isinstance(price, bool) or not isinstance(price, (int, Decimal)):
+        raise ContractError("Invalid or missing field: price")
+    item["price"] = Decimal(price)
+    return item
+
+
+def _membership(value: Any) -> dict[str, Any]:
+    item = _object(value, "Index membership")
+    for name in ("sourceId", "indexId", "instrumentId", "effectiveDate"):
+        _field(item, name, str)
+    weight = item.get("weight")
+    if isinstance(weight, bool) or not isinstance(weight, (int, Decimal)):
+        raise ContractError("Invalid or missing field: weight")
+    item["weight"] = Decimal(weight)
+    return item
+
+
 class DataHubClient:
     def __init__(self, base_url: str, *, timeout: float = 5.0, transport: httpx.BaseTransport | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
@@ -207,6 +233,35 @@ class DataHubClient:
             raise ValueError("source_id and instrument_id must be nonempty path segments")
         return _price(self._get(f"api/prices/{quote(source_id, safe='')}/{quote(instrument_id, safe='')}"))
 
+    def instrument(self, instrument_id: str, *, page: int = 1, page_size: int = 100) -> dict[str, Any]:
+        _path_segment(instrument_id, "instrument_id")
+        data = _object(self._get(
+            f"api/instruments/{quote(instrument_id, safe='')}",
+            _params(page=page, pageSize=page_size),
+        ), "Instrument detail")
+        _field(data, "instrumentId", str)
+        _field(data, "serverTimeUtc", str)
+        _page_metadata(data)
+        data["observations"] = [_instrument_observation(item)
+                                for item in _field(data, "observations", list)]
+        return data
+
+    def memberships(self, instrument_id: str, *, page: int = 1, page_size: int = 100) -> dict[str, Any]:
+        _path_segment(instrument_id, "instrument_id")
+        data = _object(self._get(
+            f"api/instruments/{quote(instrument_id, safe='')}/memberships",
+            _params(page=page, pageSize=page_size),
+        ), "Instrument memberships")
+        _field(data, "instrumentId", str)
+        _field(data, "serverTimeUtc", str)
+        _field(data, "sourceId", str)
+        _field(data, "sourceStatus", str)
+        _field(data, "lastSuccessfulValidationAtUtc", str, nullable=True)
+        _field(data, "lastError", str, nullable=True)
+        _page_metadata(data)
+        data["items"] = [_membership(item) for item in _field(data, "items", list)]
+        return data
+
     def news(self, *, page: int = 1, page_size: int = 100, keyword: str | None = None,
              category: str | None = None, published_from: str | None = None,
              published_to: str | None = None, sort_direction: str | None = None) -> dict[str, Any]:
@@ -232,6 +287,18 @@ class DataHubClient:
 
 def _params(**values: Any) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
+
+
+def _path_segment(value: str, name: str) -> None:
+    if not isinstance(value, str) or not value or value in (".", "..") or "/" in value or "\\" in value:
+        raise ValueError(f"{name} must be a nonempty path segment")
+
+
+def _page_metadata(page: dict[str, Any]) -> None:
+    for name in ("page", "pageSize", "totalCount", "totalPages"):
+        number = _field(page, name, int)
+        if number < (1 if name in ("page", "pageSize") else 0):
+            raise ContractError(f"Invalid field: {name}")
 
 
 def _decimal_param(value: Decimal | str | None) -> str | None:

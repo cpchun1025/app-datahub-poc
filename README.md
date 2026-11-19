@@ -5,11 +5,12 @@ Equity latest-state prices 係第一個示範 data product，bounded recent news
 經 REST API 同 terminal-inspired 深色 UI 顯示，並以 checkpoint 恢復快取。
 
 - 係 **latest-state Data Hub**，唔係歷史數據庫，亦唔係交易系統：冇 tick history、冇 audit trail、冇 order／position。
-- **所有來源都係 mock**：唔連任何真實外部服務（Solace、MSCI、Barra、MSSQL 全部冇連）。
+- 預設係 **mock-only**，唔連任何真實外部服務；另有明確 opt-in 嘅 local synthetic CSV showcase，唔係市場資料來源。
 - 冇 Redis、PostgreSQL、Kafka 等額外基建：backend 用 in-memory store + 本機 checkpoint 檔案。
 - Prices grid 支援 server-side sorting／filters、Pause／Resume、技術欄位 visibility 同有 row cap 嘅 request-time CSV export。
-- News 使用獨立 schema、identity、publication time 同 retention；本階段只使用 synthetic mock，冇新聞 CSV。
-- 獨立 [Python reference client](clients/python/README.md) 只經 HTTP 讀取 prices、news 同來源狀態，毋須啟動 frontend。
+- News 使用獨立 schema、identity、publication time 同 retention；只使用 synthetic mock，冇新聞 CSV。
+- 獨立 [Python reference client](clients/python/README.md) 經 HTTP 讀取 prices、news、來源狀態、instrument observations 同 memberships，毋須啟動 frontend。
+- opt-in CSV→API→Python→UI 完整步驟、schema 同限制見 [doc/csv-showcase.md](doc/csv-showcase.md)。
 - Data product、source/provider 同 transport 係不同概念；Solace 係 transport。Barra risk／factor exposures、PnL 同 alpha signals 只係未來方向，**未實作**。
 - 技術設計、API 規格、恢復流程同限制嘅完整說明：[doc/technical-spec.md](doc/technical-spec.md)。
 
@@ -69,7 +70,7 @@ docker compose up --build -d
 ```text
  Mock sources (in-process)             Backend (ASP.NET Core, .NET 10)                              Browser
  ┌────────────────────┐   ┌───────────────────────────────────────────────────────────┐      ┌─────────────┐
- │ mock-stream-a  (S) │   │  SourceRunner x3 ──apply──▶ LatestStateStore (in-memory)   │      │ React 19 UI │
+ │ mock-stream-a  (S) │   │  SourceRunner(s) ──apply──▶ LatestStateStore (in-memory)  │      │ React 19 UI │
  │ mock-stream-b  (S) │──▶│  snapshot + stream/poll        key = (SourceId, InstrumentId)│─REST▶│ polling,    │
  │ mock-api-c     (P) │   │                                   │            ▲              │      │ 1-page grid │
  └────────────────────┘   │                      CheckpointService      RecoveryHostedService   └─────────────┘
@@ -79,8 +80,11 @@ docker compose up --build -d
                             └───────────────────────────────────────────────────────────┘
 ```
 
+> 圖中係預設 mock 價格流程；opt-in CSV 會另外將 spot snapshots 接入價格 store，並將 composition memberships 寫入獨立 store。
+
 - 每個來源有自己嘅 `SourceRunner`：先攞一次完整 snapshot，之後用 streaming／polling 更新最新值。一個來源失敗只影響佢自己嘅 status。
-- `LatestStateStore` 係 in-memory，key 係 `(SourceId, InstrumentId)`：**不同來源相同 InstrumentId 各自獨立，唔會互相覆蓋**（mock 三個來源都有 `MOCK00001`，價格同貨幣都唔同）。
+- `LatestStateStore` 係 in-memory，key 係 `(SourceId, InstrumentId)`：**不同來源相同 InstrumentId 各自獨立，唔會互相覆蓋**。
+- Opt-in CSV 只匯入 synthetic spot snapshots 同 DEMO index memberships；membership 係獨立 typed store，唔會變成價格列。
 - API 只讀 store（讀取唔使攞 lock），唔會即時問來源。
 - Python reference client 同 browser 都係獨立 API consumers；client 不參與 ingestion，亦不讀 checkpoint。
 - `CheckpointService` 定時（預設 30 秒）、手動、同 shutdown 時將 store 寫入本機檔案；`RecoveryHostedService` 喺 backend 開始接受請求之前讀返出嚟。
@@ -89,7 +93,7 @@ docker compose up --build -d
 - 獨立 `mock-news` 每 5 秒產生 synthetic metadata，經 native DTO → mapper → `NewsRecord` → API DTO；新聞唔使用 price snapshot、revision 或刪除語義。共用 header 只顯示 backend 連線狀態同時鐘；各產品來源狀態喺各自頁面顯示。
 - NEWS SOURCES 面板顯示 fetch 狀態、last attempt／success、cache 數量、最新已知 publication instant 同錯誤。`Outage 20s` 只係模擬失敗；20 秒後或按 `End outage` 後，等下一次 fetch（最多約 5 秒）成功才恢復 Connected。舊文章時間唔代表來源斷線。
 - News store key = `(SourceId, ArticleId)`，預設 `DataHub:News:MaxItems=500`、`RetentionDays=7`，以 first-seen 清理；有界 identity 記錄（最多 MaxItems）令已過期項目重複 fetch 唔會延長壽命，並保存到 checkpoint。大量新 identity 會淘汰最舊 identity 記錄；被遺忘後再次出現會視為新項目。列表缺席或 fetch 失敗唔刪除新聞。
-- Checkpoint schema 2 保存兩種產品；schema 1 價格檔可讀，news 從空開始。未知未來 schema 會顯示 warning 並阻止保存，避免覆蓋；恢復新聞在本次成功 fetch 前唔標示 Connected。
+- Checkpoint schema 3 保存 prices、news identities 同 CSV memberships/import status；schema 1／2 仍可讀。恢復嘅 CSV 內容要重新驗證／snapshot sync 後先反映為 Live。未知未來 schema 會顯示 warning 並阻止保存，避免覆蓋。
 
 ---
 
@@ -99,6 +103,7 @@ docker compose up --build -d
 app-datahub-poc/
 ├─ README.md                        本文件
 ├─ doc/technical-spec.md            技術設計文件
+├─ doc/csv-showcase.md              opt-in synthetic CSV→API→Python／UI showcase
 ├─ compose.yaml                     Docker Compose：backend + frontend 兩個 service
 ├─ compose.slow-snapshot.yaml       示範用 override：拉長 mock snapshot，肉眼睇到 RECOVERING
 ├─ .env.example                     Compose 變數範例（複製成 .env）
@@ -114,6 +119,7 @@ app-datahub-poc/
 │  │  ├─ Configuration/             DataHubOptions、DataHubOptionsValidator、JSON 設定
 │  │  ├─ Domain/                    PriceUpdate、PriceRecord、SourceStatus…
 │  │  ├─ News/                      synthetic native DTO、mapper、typed store、fetch status、API
+│  │  ├─ Csv/                       opt-in synthetic CSV reader、spot adapter、membership store／API
 │  │  ├─ Sources/                   ISourceAdapter／ISourceCatalog；Mock/ 係 mock 實作
 │  │  ├─ Store/                     ILatestStateStore、LatestStateStore（in-memory）、PriceQueryEngine
 │  │  ├─ Sync/                      SourceRunner、SourceRegistry／SourceSupervisor、RecoveryHostedService、status 計算
@@ -293,6 +299,11 @@ Compose 變數用 `.env` 覆寫：`Copy-Item .env.example .env`，見 §8。
 | `Checkpoint:FileName` | `checkpoint.json` | 只可以係檔案名 |
 | `Checkpoint:IntervalSeconds` | `30` | 定時 checkpoint 間隔（資料冇變就跳過） |
 | `Checkpoint:SaveOnShutdown` | `true` | 正常停止時寫最後一個 checkpoint |
+| `CsvShowcase:Enabled` | `false` | 明確 opt-in synthetic CSV demo；預設不讀任何 CSV |
+| `CsvShowcase:SpotPath`／`CompositionPath` | 未設定 | 啟用時必須提供；相對路徑以 content root 為準，亦接受絕對／UNC path |
+| `CsvShowcase:SpotSourceId`／`CompositionSourceId` | `demo-csv`／`demo-composition` | 必須互不相同，亦不可同 mock source ID 衝突 |
+| `CsvShowcase:PollIntervalSeconds` | `5` | spot file 檢查間隔 |
+| `CsvShowcase:MaxFileBytes`／`MaxRows`／`MaxFieldLength` | `2000000`／`10000`／`256` | 各 CSV 檔案大小、列數及欄位長度上限 |
 | `Freshness:StaleAfterSeconds` | `30` | 冇任何 feed 活動超過呢個時間 → `Stale`；`0` 停用。Polling 來源至少用 3 倍 poll 間隔 |
 | `Api:DefaultPageSize` / `MaxPageSize` | `100` / `500` | `/api/prices` 分頁 |
 | `Api:ExportMaxRows` | `10000` | 每次 CSV 最多輸出行數，合法範圍 1–100000；超限回 422，唔截斷 |
@@ -358,7 +369,7 @@ Container 內部（已喺 Dockerfile／`compose.yaml` 設定，一般唔使改�
 
 ## 10. Mock source 行為
 
-所有來源都喺 backend process 內模擬；預設三個 price sources（`Sources/Mock/`），另有一個 `mock-news`：
+預設 price sources 由 `DataHub:Mock:Sources` 喺 backend process 內模擬；來源數量按設定決定，另有一個 `mock-news`。下表係標準 mock source 設定例；實際來源以 `/api/sources` 為準：
 
 | SourceId | 類型 | Instruments | 更新節奏 | Snapshot 延遲 | 貨幣 | 小數位 |
 |---|---|---|---|---|---|---|
@@ -366,7 +377,7 @@ Container 內部（已喺 Dockerfile／`compose.yaml` 設定，一般唔使改�
 | `mock-stream-b` | Streaming | 1500 | 每 400 ms 推 15 個更新 | 300 ms | HKD | 2 |
 | `mock-api-c` | Polling（每 5 秒） | 800 | upstream 每 1000 ms 變 40 個 | 200 ms | EUR | 3 |
 
-- **InstrumentId**：`MOCK00001`、`MOCK00002`…；三個來源用同一個編號空間，所以 `MOCK00001` 喺三個來源各有一行（價格同貨幣唔同），用嚟示範「同一 InstrumentId 唔會互相覆蓋」。
+- **InstrumentId**：`MOCK00001`、`MOCK00002`…；每個 configured source 用同一編號空間，`MOCK00001` 喺每個來源各有一行，唔會跨來源互相覆蓋；新增來源時行數按設定增加。
 - **價格**：起始價 10–500（按來源 `Seed` 固定），之後逐個 tick 隨機漫步（每次最多 `MaxMovePercent`%）。每個 instrument 有來源自己嘅單調遞增 `revision`（**revision 只喺同一來源內可比較**）。
 - **Streaming**：先訂閱、再攞 snapshot；斷線／訂閱隊列滿（1024 個 batch）→ 自動重新訂閱，並即刻再攞一個 snapshot 補返可能漏咗嘅更新（期間 `Recovering`）。
 - **Polling**：只攞 `revision` 比上次 cursor 新嘅 record；同一 instrument 兩次 poll 之間變咗幾次，只見到最新一次。
@@ -382,8 +393,8 @@ Container 內部（已喺 Dockerfile／`compose.yaml` 設定，一般唔使改�
 
 | 步驟 | 動作 | 預期 |
 |---|---|---|
-| 1 | 分別啟動 backend（Terminal 1）同 frontend（Terminal 2） | Backend log 見 `Starting 3 source runner(s)`；UI 開得到 |
-| 2 | 觀察 snapshot 數據同持續更新 | EQUITY PRICE SOURCES 面板顯示三個來源 `LIVE`，筆數約 2000／1500／800（共約 4300 行）；價格格仔隨 polling 閃動 ▲／▼；`curl.exe http://localhost:5080/api/sources` 見 3 個 `Live` |
+| 1 | 分別啟動 backend（Terminal 1）同 frontend（Terminal 2） | Backend log 顯示設定嘅 runner 數目；UI 開得到 |
+| 2 | 觀察 snapshot 數據同持續更新 | EQUITY PRICE SOURCES 面板顯示已設定 sources 狀態；`/api/sources` 可確認實際數目。上表三個標準例嘅筆數約 2000／1500／800；價格格仔隨更新閃動 ▲／▼ |
 | 3 | 手動保存 checkpoint：撳 **Save checkpoint**（或 `curl.exe -X POST http://localhost:5080/api/admin/checkpoint`） | Toolbar 顯示 `OK`；status bar **CHECKPOINT OK**（時間 · 筆數 · 大小 · 耗時）；`backend\src\DataHub.Api\data\checkpoints\checkpoint.json` 出現 |
 | 4 | **停止 backend**（Terminal 1 撳 Ctrl+C），frontend 繼續運行 | Backend log：`Final checkpoint on shutdown: Saved.` |
 | 5 | 睇 UI | 紅色 **BACKEND UNREACHABLE** banner、Header `BACKEND DISCONNECTED`；表格保留最後數據但變暗；每個來源同價格行嘅 status 改顯示 `DISCONNECTED`（滑鼠移上去嘅提示會寫 `Last known: LIVE`，並註明未能確認）；admin 按鈕停用；UI 持續重試 |
@@ -412,7 +423,7 @@ Ctrl+C 係正常停止，會寫最後一個 checkpoint。強制結束 process（
 ### Docker 版本（步驟 8）
 
 ```powershell
-docker compose up --build -d                  # 開 http://localhost:8080，等三個來源 LIVE
+docker compose up --build -d                  # 開 http://localhost:8080，等 configured sources LIVE
 # 撳 Save checkpoint（或：curl.exe -X POST http://localhost:5080/api/admin/checkpoint）
 
 # (a) 停低再起：container 被移除，volume 保留
@@ -422,7 +433,7 @@ docker compose logs backend | Select-String "Restored"     # Restored N record(s
 
 # (b) 重建 backend container（想睇 RECOVERING：加 slow-snapshot override）
 docker compose -f compose.yaml -f compose.slow-snapshot.yaml up -d --force-recreate backend
-# UI 先顯示 BACKEND UNREACHABLE，backend 返嚟後三個來源先後 RECOVERING → LIVE；nginx 唔使重啟
+# UI 先顯示 BACKEND UNREACHABLE，backend 返嚟後 sources 先後 RECOVERING → LIVE；nginx 唔使重啟
 docker compose up -d --force-recreate backend                # 回復預設設定
 
 # (c) 模擬 crash：docker kill 唔會觸發 restart policy（Docker 視為手動停止），要自己起返
@@ -446,6 +457,8 @@ JSON 用 camelCase；enum 係 PascalCase 字串；時間一律 UTC（`…Z`）�
 | GET | `/api/prices` | Filter／sort 後分頁；`page` 預設 1，`pageSize` 預設 100、上限預設 500。每行帶 `sourceStatus`，回應帶符合來源／status filter 嘅來源 freshness |
 | GET | `/api/prices/export.csv` | 同一套 filter／sort，`scope=page`（預設）或 `scope=all`；超出 `Api:ExportMaxRows` → 422 `problem+json` |
 | GET | `/api/prices/{sourceId}/{instrumentId}` | 單一 record；未知來源或 instrument → 404 |
+| GET | `/api/instruments/{instrumentId}` | 分頁列出各來源對該 instrument 的 spot observations（唔合併） |
+| GET | `/api/instruments/{instrumentId}/memberships` | 分頁列出 synthetic DEMO index memberships |
 | GET | `/api/news` | Bounded news cache；`page`、`pageSize`、`keyword`、`category`、`publishedFrom`、`publishedTo`、`sortDirection`；回應包括 news source fetch 狀態 |
 | POST | `/api/admin/snapshot/{sourceId}` | 即時重新攞 snapshot：200／404／409（已有 snapshot 運行中）／502（來源失敗） |
 | POST | `/api/admin/checkpoint` | 即時寫 checkpoint：200／409（忙緊、停用或冇資料）／500（寫入失敗） |
@@ -508,9 +521,11 @@ CSV 注意事項：
 
 ## 13. Extension points
 
-> 以下係設計上嘅擴充點。**今次只實作 mock，下面嘅真實來源／MSSQL 全部未實作、未驗證。**
+> 預設係 mock-only；另已實作明確 opt-in 嘅 synthetic CSV showcase。以下真實來源／MSSQL 全部未實作、未驗證。
 
-CNFIN news 嘅獨立調查見 [doc/cnfin-discovery.md](doc/cnfin-discovery.md)（2026-11-06）。使用者已接受 Prompt 1；CNFIN 維持 **blocked／未啟用**，未確認 metadata 使用授權前唔正式擷取或 polling。時區、publisher、article ID／canonical URL 保持 unknown，唔自行推斷；有限取樣唔代表完整來源覆蓋。**未實作 adapter，runtime 仍然 mock-only**。下面嘅 adapter 擴充點係價格合約，唔可以直接套用到 news。
+CNFIN news 嘅獨立調查見 [doc/cnfin-discovery.md](doc/cnfin-discovery.md)（2026-11-06）。使用者已接受 Prompt 1；CNFIN 維持 **blocked／未啟用**，未確認 metadata 使用授權前唔正式擷取或 polling。時區、publisher、article ID／canonical URL 保持 unknown，唔自行推斷；有限取樣唔代表完整來源覆蓋。**未實作 adapter**。下面嘅 adapter 擴充點係價格合約，唔可以直接套用到 news。
+
+CSV showcase 只供本機演示：不讀 external source，不會由 UI polling 觸發 file access；完整可複製流程、schema、atomic publish 建議及限制見 [doc/csv-showcase.md](doc/csv-showcase.md)。唔好將生成 CSV 或 runtime checkpoint 提交到 Git。
 
 | 目標 | 擴充點 | 要做嘅事 |
 |---|---|---|
@@ -521,7 +536,7 @@ CNFIN news 嘅獨立調查見 [doc/cnfin-discovery.md](doc/cnfin-discovery.md)�
 
 要留意：
 
-- 而家 `UseMockSources=false` 會令啟動失敗（刻意防止誤以為已連真實來源）；接真實來源時要一併調整 `DataHubOptionsValidator`（以及 `Mock:Sources` 至少一個嘅檢查）。
+- 而家 `UseMockSources=false` 會令啟動失敗，因為 mock sources 仍然係必需；opt-in CSV showcase 係 synthetic，唔會取代 mock source。接真實來源時要一併調整 `DataHubOptionsValidator`。
 - Revision 只喺同一來源內可比較；真實來源嘅 snapshot 一致性（snapshot 同 stream 序號嘅關係）、排序保證、刪除通知能力都**未確認**，接駁前要同來源方確認，否則 [doc/technical-spec.md §6.6](doc/technical-spec.md) 講嘅「先訂閱、再攞 snapshot」策略可能要調整。完整嘅接駁步驟、要確認嘅問題清單、MSSQL 持久化同 production 前缺口見 [doc/technical-spec.md §12](doc/technical-spec.md)。
 - 真實來源需要 credentials 時，用環境變數或 secret store 提供，**唔好提交落 repo**。
 
@@ -529,11 +544,18 @@ CNFIN news 嘅獨立調查見 [doc/cnfin-discovery.md](doc/cnfin-discovery.md)�
 
 ## 14. 驗證狀態
 
-以下舊記錄係先前文件記載，唔代表新電腦或今次修改已重新執行。今次實際驗證另見本次交付摘要；
-Node 24、Docker、Visual Studio F5 同舊 browser 驗證不可推論為今次通過。
+以下舊記錄係先前文件記載，唔代表今次已重新執行。Prompt 03c 最新本機驗證、命令及限制會記錄喺本節；Node 24、Docker、Visual Studio F5 同舊 browser 驗證不可推論為今次通過。
 
 2026-11-16 API-first review follow-up 實際驗證及限制見
 [doc/api-first-review.md](doc/api-first-review.md) 的 Follow-up 區段。
+
+### Prompt 03c：CSV showcase（2026-11-19）
+
+- Backend（.NET SDK 10.0.404）：`Set-Location backend; dotnet test DataHub.sln --no-restore`；xUnit **239 passed／239 total**。
+- Frontend（Node v26.13.0／npm 11.20.0）：`npm test`（Vitest **15 files／109 tests passed**）、`npm run lint`、`npm run build`；三者成功。
+- Python（3.15.2）：`Set-Location clients\python; .\.venv\Scripts\python.exe -m pytest -q`；**40 passed**。
+- 手動 E2E：synthetic filesystem CSV → backend HTTP → Python；驗證 initial／next／malformed／valid recovery／checkpoint-restart，並用 browser 操作 SourcePanel filter 及 Instrument Explorer。Malformed 保留舊資料，重啟由 checkpoint restore 後重新 sync；本次 browser console 無 errors/warnings。
+- UNC／SMB、Docker CSV mount、Visual Studio F5 未驗證；本次沒有啟用 external sources。
 
 ### Prompt 3（本機，2026-11-15）
 
@@ -578,8 +600,8 @@ Dockerfiles 無需修改：現有 build context／COPY 已包括新 source，兩
 |---|---|---|
 | Backend build | `dotnet build DataHub.sln --no-incremental` | 成功，0 warning、0 error |
 | Backend tests | `dotnet test DataHub.sln --no-build` | **166／166 通過**（涵蓋見下） |
-| Frontend（Windows 本機 Node v26.12.0） | `npm run lint`、`npm test`、`npm run build` | lint exit 0；8 個 test file／**78 個測試通過**；build 成功 |
-| Frontend（Node 24.22.2） | 喺 `node:24-alpine` container（Linux）入面 `npm ci`，再跑 `npm run lint`、`npm test`、`npm run build` | lint 0 warning／0 error；**78／78 通過**；build 成功，bundle hash 同本機一樣。呢個係 Linux container，唔係 Windows 本機 Node 24 |
+| Frontend（Windows 本機 Node v26.12.0） | `npm run lint`、`npm test`、`npm run build` | lint、測試及 build 當時通過；原始記錄未保留可作比較嘅現時 test count |
+| Frontend（Node 24.22.2） | 喺 `node:24-alpine` container（Linux）入面 `npm ci`，再跑 `npm run lint`、`npm test`、`npm run build` | lint、測試及 build 當時通過。呢個係 Linux container，唔係 Windows 本機 Node 24 |
 | Frontend preview | `npm run preview`（backend 同時喺 `:5080` 運行） | `http://localhost:4173/` 回 200；`/api/health`、`/api/sources` 經 proxy 回到 backend 實際數據 |
 | Publish + 非 Docker 運行 | `dotnet publish -c Release`，再由另一個工作目錄運行 publish 出嚟嘅 DLL（`ASPNETCORE_URLS=http://127.0.0.1:5090`） | 三個來源 `Live`（約 2000／1500／800）；手動 checkpoint 存到 `<publish>\data\checkpoints`，冇喺該工作目錄建立 `data`；`/swagger/index.html` 404、`/openapi/v1.json` 200；publish 輸出唔含本機 `data\` |
 | Windows 正常停止 | `dotnet run` 運行中對 console 發 Ctrl+C | 30 秒內結束；log 有 `Final checkpoint on shutdown: Saved.`，checkpoint 檔案時間更新（驗證 script 冇攞到 exit code） |
@@ -633,7 +655,7 @@ Docker 實測內容（單次執行）：
 ## 15. 已知限制
 
 - **只係 latest-state**：冇歷史、冇 tick replay；UI 嘅閃爍只反映兩次 polling 之間嘅淨變動。
-- **所有來源係 mock**；真實來源嘅 snapshot 一致性、排序同刪除通知能力未確認（見 §13）。
+- **預設來源係 mock**；opt-in CSV 只係合成資料。真實來源嘅 snapshot 一致性、排序同刪除通知能力未確認（見 §13）。
 - **Revision 係 source-local**，跨來源唔可比較；跨來源冇全域一致性保證（checkpoint 每個來源 slice 自身一致，跨來源係「模糊」切面）。
 - **Mock streaming 冇刪除訊息**，下市要等下一次完整 snapshot；Polling 亦睇唔到刪除。完整 snapshot 預設每週一次（`Snapshot:IntervalHours=168`）。
 - **Stale 係讀取時即時計算**；`Stale` 只反映 feed 活動時間，唔代表數值錯。

@@ -1,9 +1,13 @@
 # Python reference client
 
 這是獨立、同步的 Data Hub HTTP consumer，不是完整 SDK、provider 或常駐 service。
-它只讀 prices、news、source status，不讀 store／checkpoint、不依賴 frontend，
+它只經 HTTP 讀 prices、news、source status、instrument observations 同 memberships，
+不讀 store／checkpoint、不依賴 frontend，
 亦不直接連接任何外部來源。Optional Yahoo provider 是另一個未實作的 ingestion 方向，
 不是這個 client。
+
+Optional synthetic CSV showcase（包括 `demo-csv` source、完整資料產生／恢復流程及限制）
+見 [CSV Showcase](../../doc/csv-showcase.md)。此例只適用於明確 opt-in 並配置 CSV files 嘅 backend。
 
 ## 環境及安裝
 
@@ -72,7 +76,8 @@ POSIX 換成 `.venv/bin/python` 及 `examples/demo.py`／`examples/smoke.py`。
 ```
 
 Demo 顯示來源狀態、價格與新聞各一頁，並以 `max-pages` 示範有上限的多頁價格讀取；
-同時提供 source ID 同 instrument ID 時查詢單筆。`--help` 列出其他 options。
+提供 instrument ID 時亦會列出跨來源、但不合併嘅 observations 同 composition memberships；
+同時提供 source ID 同 instrument ID 時查詢單筆價格。`--help` 列出其他 options。
 `--base-url` 必須明確提供；timeout 預設 5 秒，可用 `--timeout` 設定正數秒。
 錯誤顯示在 stderr，並以非零狀態結束；不自動 retry。
 
@@ -94,6 +99,8 @@ with DataHubClient("http://127.0.0.1:51873", timeout=5) as hub:
     prices = hub.prices(page=1, page_size=10, currency="USD",
                         min_price=Decimal("10.00"), sort_by="price", sort_direction="desc")
     one = hub.price("mock-stream-a", "MOCK00001")
+    observations = hub.instrument("MOCK00001", page_size=10)
+    memberships = hub.memberships("MOCK00001", page_size=10)
     news = hub.news(page=1, page_size=10, category="Markets",
                     published_from="2026-01-01", sort_direction="desc")
     batch = hub.price_pages(max_pages=2, page_size=10)
@@ -119,6 +126,12 @@ with DataHubClient("http://127.0.0.1:51873", timeout=5) as hub:
   不會無限制 retry，也不自行重做 backend validation、mapping、retention 或 freshness 判斷。
 
 ## 本次驗證
+
+2026-11-19，Windows／Python 3.15.2（Prompt 03c follow-up）：`.venv\Scripts\python.exe -m pytest -q`；
+**40 passed**。測試使用本機 synthetic／MockTransport，唔打 external websites。
+使用 opt-in CSV showcase 經 filesystem→backend HTTP 查 spot observations、memberships，
+及 checkpoint restart 嘅手動 E2E 步驟見 [CSV Showcase](../../doc/csv-showcase.md)；
+UNC／SMB、Docker mount 同 external sources 未驗證。
 
 2026-11-16，Windows／Python 3.15.2：
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using DataHub.Api.Configuration;
+using DataHub.Api.Csv;
 using DataHub.Api.Domain;
 using DataHub.Api.Hosting;
 using DataHub.Api.News;
@@ -23,7 +24,7 @@ public static class DataHubEndpoints
 
         app.MapGet("/", () => TypedResults.Ok(new
         {
-            name = "Data Hub PoC (latest-state, MOCK sources)",
+            name = "Data Hub PoC (latest-state; synthetic mock and optional CSV demo sources)",
             health = "/api/health",
             openapi = "/openapi/v1.json",
             swagger = "/swagger",
@@ -40,6 +41,18 @@ public static class DataHubEndpoints
             .WithName("GetSources")
             .WithTags("Sources")
             .WithSummary("Per-source status, freshness and sync details.");
+
+        api.MapGet("/instruments/{instrumentId}", GetInstrument)
+            .WithName("GetInstrument")
+            .WithTags("Instruments")
+            .WithSummary("Paged spot observations for one stable instrument identity.")
+            .WithDescription("Observations are source-specific and are not consolidated prices; requests are not a shared cross-source snapshot.");
+
+        api.MapGet("/instruments/{instrumentId}/memberships", GetInstrumentMemberships)
+            .WithName("GetInstrumentMemberships")
+            .WithTags("Instruments")
+            .WithSummary("Paged synthetic DEMO index memberships; weights are fractions from 0 to 1.")
+            .WithDescription("Memberships are not price records and may be from a separate file validation time.");
 
         api.MapGet("/prices", GetPrices)
             .WithName("GetPrices")
@@ -116,14 +129,58 @@ public static class DataHubEndpoints
             "ok",
             time.GetUtcNow(),
             info.StartedAtUtc,
-            options.Value.UseMockSources,
+            views.All(view => view.Descriptor.IsMock),
             options.Value.Api.AdminEnabled,
             summary,
             ToDto(checkpoints.Status)));
     }
 
-    private static Ok<SourceListResponse> GetSources(SourceViewService sources, TimeProvider time)
-        => TypedResults.Ok(new SourceListResponse(time.GetUtcNow(), sources.GetAll().Select(ToDto).ToArray()));
+    private static Ok<SourceListResponse> GetSources(SourceViewService sources, CsvImportMonitor csvMonitor, TimeProvider time)
+        => TypedResults.Ok(new SourceListResponse(time.GetUtcNow(),
+            sources.GetAll().Select(view => ToDto(view, csvMonitor)).ToArray()));
+
+    private static Results<Ok<InstrumentDetailResponse>, ValidationProblem> GetInstrument(
+        string instrumentId, int? page, int? pageSize, InstrumentReadService reader, IOptions<DataHubOptions> options)
+    {
+        if (!TryInstrumentId(instrumentId, out var identityError))
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]> { ["instrumentId"] = [identityError] });
+        if (!TryPage(page, pageSize, options.Value.Api, out var current, out var size, out var errors))
+            return TypedResults.ValidationProblem(errors);
+        return TypedResults.Ok(reader.ReadObservations(instrumentId, current, size));
+    }
+
+    private static Results<Ok<InstrumentMembershipResponse>, ValidationProblem> GetInstrumentMemberships(
+        string instrumentId, int? page, int? pageSize, InstrumentReadService reader, IOptions<DataHubOptions> options)
+    {
+        if (!TryInstrumentId(instrumentId, out var identityError))
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]> { ["instrumentId"] = [identityError] });
+        if (!TryPage(page, pageSize, options.Value.Api, out var current, out var size, out var errors))
+            return TypedResults.ValidationProblem(errors);
+        return TypedResults.Ok(reader.ReadMemberships(instrumentId, current, size));
+    }
+
+    private static bool TryInstrumentId(string instrumentId, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(instrumentId) || instrumentId.Length > 256)
+        {
+            error = "instrumentId must contain between 1 and 256 characters.";
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryPage(int? requestedPage, int? requestedSize, ApiOptions options, out int page, out int size,
+        out Dictionary<string, string[]> errors)
+    {
+        errors = new Dictionary<string, string[]>();
+        page = requestedPage ?? 1;
+        size = requestedSize ?? options.DefaultPageSize;
+        if (page < 1) errors["page"] = ["page must be a positive integer."];
+        if (size < 1 || size > options.MaxPageSize)
+            errors["pageSize"] = [$"pageSize must be between 1 and {options.MaxPageSize}."];
+        return errors.Count == 0;
+    }
 
     private static Results<Ok<PriceListResponse>, ValidationProblem, ProblemHttpResult> GetPrices(
         [AsParameters] PriceQueryParameters parameters,
@@ -200,7 +257,7 @@ public static class DataHubEndpoints
                 statusCode: StatusCodes.Status404NotFound);
         }
 
-        return TypedResults.Ok(PriceDto.From(record, view.Status));
+        return TypedResults.Ok(PriceDto.From(record, view.Status, view.Descriptor.IsSynthetic));
     }
 
     private static async Task<Results<Ok<SnapshotRefreshResponse>, ProblemHttpResult>> RefreshSnapshotAsync(
@@ -312,7 +369,7 @@ public static class DataHubEndpoints
         return TypedResults.Ok(new MockOutageResponse(MockNewsService.SourceId, duration, news.SetOutage(duration)));
     }
 
-    private static SourceDto ToDto(SourceView view)
+    private static SourceDto ToDto(SourceView view, CsvImportMonitor csvMonitor)
     {
         var runtime = view.Runtime;
         var (error, errorAt) = LatestError(runtime);
@@ -321,6 +378,7 @@ public static class DataHubEndpoints
             view.Descriptor.DisplayName,
             view.Descriptor.Kind,
             view.Descriptor.IsMock,
+            view.Descriptor.IsSynthetic,
             view.Descriptor.Description,
             view.Descriptor.PriceDecimals,
             view.Status,
@@ -333,7 +391,11 @@ public static class DataHubEndpoints
             runtime.LastFeedActivityAtUtc,
             runtime.NextSnapshotDueAtUtc,
             error,
-            errorAt);
+            errorAt,
+            csvMonitor.GetStatus(view.Descriptor.SourceId) is { } import
+                ? new CsvImportStatusDto(import.LastFileCheckAtUtc, import.LastSuccessfulValidationAtUtc,
+                    import.LastDataImportAtUtc, import.Fingerprint, import.RowCount, import.ErrorCount, import.LastError)
+                : null);
     }
 
     private static (string? Error, DateTimeOffset? At) LatestError(SourceRuntimeState runtime)

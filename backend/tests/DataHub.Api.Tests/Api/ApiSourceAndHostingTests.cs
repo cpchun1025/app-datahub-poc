@@ -104,9 +104,13 @@ public class ApiMockSourceTests
 
         var list = await client.WaitForLiveAsync("mock-stream-a", "mock-stream-b", "mock-api-c");
         Assert.All(list.Sources, source => Assert.True(source.IsMock));
-        Assert.Equal(
-            [("mock-stream-a", SourceKind.Streaming, 50L), ("mock-stream-b", SourceKind.Streaming, 40L), ("mock-api-c", SourceKind.Polling, 30L)],
-            list.Sources.Select(source => (source.SourceId, source.Kind, source.RecordCount)));
+        var shipped = list.Sources.ToDictionary(source => source.SourceId);
+        Assert.Equal(("mock-stream-a", SourceKind.Streaming, 50L),
+            (shipped["mock-stream-a"].SourceId, shipped["mock-stream-a"].Kind, shipped["mock-stream-a"].RecordCount));
+        Assert.Equal(("mock-stream-b", SourceKind.Streaming, 40L),
+            (shipped["mock-stream-b"].SourceId, shipped["mock-stream-b"].Kind, shipped["mock-stream-b"].RecordCount));
+        Assert.Equal(("mock-api-c", SourceKind.Polling, 30L),
+            (shipped["mock-api-c"].SourceId, shipped["mock-api-c"].Kind, shipped["mock-api-c"].RecordCount));
         Assert.True((await client.GetHealthAsync()).MockMode);
 
         // 價格持續變動：stream 來源嘅最高 revision 會上升。

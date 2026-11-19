@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using DataHub.Api.Csv;
+using DataHub.Api.Domain;
 using DataHub.Api.Persistence;
 using DataHub.Api.Store;
 using static DataHub.Api.Tests.Support.TestData;
@@ -76,6 +78,54 @@ public class CheckpointSerializerTests
         Assert.Equal("HKD", record.Currency);
         Assert.Equal(TimeSpan.Zero, record.SourceUpdatedAtUtc.Offset);
         Assert.Equal(TimeSpan.Zero, restored.SavedAtUtc.Offset);
+    }
+
+    [Fact]
+    public void SchemaThreeRoundTrip_PreservesSpotMetadataAndTypedMemberships()
+    {
+        var source = SourceData.FromRecords(
+            "csv-demo",
+            [new PriceRecord("csv-demo", "hk-0005", 123.45000001m, "HKD", T0, T0, 7, "0005.HK", PriceKind.Last)],
+            snapshotRevision: 7,
+            lastSnapshotAtUtc: T0,
+            lastUpdateReceivedAtUtc: T0);
+        var membership = new IndexMembership("demo-composition", "DEMO-HK-A", "hk-0005", 0.25m, new DateOnly(2026, 3, 1));
+        var status = new CompositionImportStatus(T0, T0, T0, "sha256", 1, 0, null);
+        var original = new CheckpointPayload(8, T0, [source])
+        {
+            Memberships = [membership],
+            CompositionStatus = status,
+        };
+
+        var restored = CheckpointSerializer.Deserialize(CheckpointSerializer.Serialize(original));
+
+        var record = Assert.Single(restored.Sources).Records["hk-0005"];
+        Assert.Equal("0005.HK", record.ProviderSymbol);
+        Assert.Equal(PriceKind.Last, record.PriceKind);
+        Assert.Equal(membership, Assert.Single(restored.Memberships));
+        Assert.Equal(status, restored.CompositionStatus);
+    }
+
+    [Fact]
+    public void Deserialize_AcceptsSchemaTwoWithoutSchemaThreeProperties()
+    {
+        const string sources = """[{"sourceId":"src-a","records":[{"instrumentId":"AAA","price":1.5,"currency":"USD","sourceUpdatedAtUtc":"2026-01-01T00:00:01Z","receivedAtUtc":"2026-01-01T00:00:02Z","sourceRevision":1}]}]""";
+        const string empty = "[]";
+        var emptyHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(empty))).ToLowerInvariant();
+        var sourceHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sources))).ToLowerInvariant();
+        var json = $$"""
+            {"schemaVersion":2,"checkpointVersion":1,"savedAtUtc":"2026-01-01T00:00:00Z","recordCount":1,
+             "payloadSha256":"{{sourceHash}}","sources":{{sources}},
+             "newsSha256":"{{emptyHash}}","news":[],
+             "newsIdentitiesSha256":"{{emptyHash}}","newsIdentities":[]}
+            """;
+
+        var restored = CheckpointSerializer.Deserialize(Encoding.UTF8.GetBytes(json));
+
+        Assert.Single(restored.Sources);
+        Assert.Empty(restored.Memberships);
+        Assert.Null(restored.CompositionStatus);
+        Assert.Null(restored.Sources[0].Records["AAA"].PriceKind);
     }
 
     [Fact]

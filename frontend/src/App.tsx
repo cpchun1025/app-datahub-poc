@@ -3,7 +3,7 @@ import { priceQueryKey, type PriceQuery } from './api/client'
 import { Banners } from './components/Banners'
 import { Header } from './components/Header'
 import { Pagination } from './components/Pagination'
-import { PriceDetail } from './components/PriceDetail'
+import { InstrumentExplorer } from './components/InstrumentExplorer'
 import { PricesTable } from './components/PricesTable'
 import { SourcePanel } from './components/SourcePanel'
 import { StatusBar } from './components/StatusBar'
@@ -186,7 +186,7 @@ export default function App() {
             columns={columns}
           />
         </div>
-        <PriceDetail row={selectedRow} decimals={selectedRow ? sourceDecimals.get(selectedRow.sourceId) : undefined} />
+        <InstrumentExplorer row={selectedRow} decimals={selectedRow ? sourceDecimals.get(selectedRow.sourceId) : undefined} />
         <Pagination
           page={page}
           pageSize={pageSize}

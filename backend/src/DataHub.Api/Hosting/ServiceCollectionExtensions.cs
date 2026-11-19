@@ -6,6 +6,7 @@ using DataHub.Api.Sources.Mock;
 using DataHub.Api.Store;
 using DataHub.Api.News;
 using DataHub.Api.Sync;
+using DataHub.Api.Csv;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -26,9 +27,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ServiceInfo>();
 
         // 來源 catalog 係唯一嘅替換點：測試或日後接真實來源時，只需要註冊另一個 ISourceCatalog。
-        services.AddSingleton<ISourceCatalog, MockSourceCatalog>();
+        services.AddSingleton<ISourceCatalog, CompositeSourceCatalog>();
         services.AddSingleton<ILatestStateStore>(sp => new LatestStateStore(
             sp.GetRequiredService<ISourceCatalog>().Adapters.Select(adapter => adapter.Descriptor.SourceId)));
+        services.AddSingleton<CompositionStore>();
+        services.AddSingleton<CsvImportMonitor>();
+        services.AddSingleton(sp => new CsvShowcaseReader(
+            sp.GetRequiredService<IOptions<DataHubOptions>>().Value.CsvShowcase));
+        services.AddSingleton<InstrumentReadService>();
         services.AddSingleton<ICheckpointStore, FileCheckpointStore>();
         services.AddSingleton<CheckpointService>();
         services.AddSingleton<SourceRegistry>();
@@ -36,6 +42,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PriceReadService>();
         services.AddSingleton<NewsStore>();
         services.AddSingleton<MockNewsService>();
+        services.AddSingleton<CsvCompositionIngestionService>();
 
         // 註冊次序就係啟動次序，停止次序相反：
         // 啟動：Recovery（要喺 Kestrel 接受請求之前完成）→ Checkpoint → Mock feed → Source sync
@@ -45,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<MockNewsService>());
         services.AddHostedService<MockFeedService>();
         services.AddHostedService<SourceSupervisor>();
+        services.AddHostedService(sp => sp.GetRequiredService<CsvCompositionIngestionService>());
 
         services.ConfigureHttpJsonOptions(options => DataHubJson.Apply(options.SerializerOptions));
         services.AddProblemDetails();
@@ -79,7 +87,7 @@ public static class ServiceCollectionExtensions
                 {
                     Title = "Data Hub PoC API",
                     Version = "v1",
-                    Description = "Latest-state Data Hub PoC. All sources are MOCK (simulated, in-process). "
+                    Description = "Latest-state Data Hub PoC. Mock sources are synthetic and in-process; an optional CSV adapter can ingest operator-published synthetic demo files. "
                         + "Admin endpoints are unauthenticated and for PoC use only.",
                 };
                 return Task.CompletedTask;

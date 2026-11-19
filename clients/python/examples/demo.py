@@ -41,6 +41,18 @@ def main() -> int:
             if args.source_id and args.instrument_id:
                 item = client.price(args.source_id, args.instrument_id)
                 print(f"Exact price: {item['sourceId']}/{item['instrumentId']} {item['price']} {item['currency']}")
+            if args.instrument_id:
+                detail = client.instrument(args.instrument_id, page_size=args.page_size)
+                print(f"Instrument {detail['instrumentId']} source observations "
+                      f"({detail['totalCount']} total; as-of {detail['serverTimeUtc']}):")
+                for item in detail["observations"]:
+                    print(f"  {item['sourceId']} {item['providerSymbol']} {item['price']} {item['currency']} "
+                          f"[{item['sourceStatus']}] synthetic={item['isSynthetic']}")
+                memberships = client.memberships(args.instrument_id, page_size=args.page_size)
+                print(f"  Memberships from {memberships['sourceId']} [{memberships['sourceStatus']}] "
+                      f"({memberships['totalCount']} total):")
+                for item in memberships["items"]:
+                    print(f"    {item['indexId']} weight={item['weight']} effective={item['effectiveDate']}")
 
             news = client.news(page_size=args.page_size, keyword=args.keyword, category=args.category,
                                published_from=args.published_from, published_to=args.published_to)

@@ -1,5 +1,6 @@
 using DataHub.Api.Store;
 using DataHub.Api.News;
+using DataHub.Api.Csv;
 
 namespace DataHub.Api.Persistence;
 
@@ -12,6 +13,8 @@ public sealed record CheckpointPayload(
     public long RecordCount => Sources.Sum(source => (long)source.RecordCount);
     public IReadOnlyList<NewsRecord> News { get; init; } = [];
     public IReadOnlyList<NewsIdentity> NewsIdentities { get; init; } = [];
+    public IReadOnlyList<IndexMembership> Memberships { get; init; } = [];
+    public CompositionImportStatus? CompositionStatus { get; init; }
 }
 
 public sealed record CheckpointLoadResult(

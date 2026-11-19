@@ -7,6 +7,7 @@ TestResults/
 
 # Backend 運行期寫出嘅 checkpoint（dotnet run 時喺 backend/src/DataHub.Api/data/checkpoints）
 **/data/checkpoints/
+backend/src/DataHub.Api/data/csv-showcase/
 
 # Node
 node_modules/

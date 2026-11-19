@@ -48,6 +48,32 @@ def news_source():
             "lastError": None, "cachedItemCount": 1}
 
 
+def instrument_observation():
+    return {
+        "sourceId": "demo-csv", "displayName": "Synthetic CSV", "instrumentId": "hk-0005",
+        "providerSymbol": "0005.HK", "price": 1, "currency": "HKD",
+        "sourceUpdatedAtUtc": NOW, "receivedAtUtc": NOW, "priceKind": "Last",
+        "sourceStatus": "Live", "isSynthetic": True,
+    }
+
+
+def instrument_detail():
+    return {
+        "instrumentId": "hk-0005", "serverTimeUtc": NOW, "page": 1, "pageSize": 2,
+        "totalCount": 1, "totalPages": 1, "observations": [instrument_observation()],
+    }
+
+
+def memberships():
+    return {
+        "instrumentId": "hk-0005", "serverTimeUtc": NOW, "sourceId": "demo-composition",
+        "sourceStatus": "Connected", "lastSuccessfulValidationAtUtc": NOW, "lastError": None,
+        "page": 1, "pageSize": 2, "totalCount": 1, "totalPages": 1,
+        "items": [{"sourceId": "demo-composition", "indexId": "DEMO-HK-A",
+                   "instrumentId": "hk-0005", "weight": 0.25, "effectiveDate": "2026-03-01"}],
+    }
+
+
 def news_page(items):
     result = page(items)
     del result["sources"]
@@ -83,6 +109,37 @@ def test_integer_decimal_token_and_detail_url_encoding():
     assert item["price"] == Decimal("117")
     assert type(item["price"]) is Decimal
     assert requests[0].url.raw_path == b"/api/prices/mock-a/ABC%20%26%20XYZ"
+
+
+def test_instrument_detail_and_memberships_preserve_decimal_and_pagination():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path.endswith("/memberships"):
+            body = json.dumps(memberships()).replace('"weight": 0.25', '"weight": 0.1234567890123456789012345678')
+        else:
+            body = json.dumps(instrument_detail()).replace('"price": 1', '"price": 12345678901234567890.12345678')
+        return httpx.Response(200, content=body)
+
+    with client(handler) as hub:
+        detail = hub.instrument("hk-0005", page=2, page_size=2)
+        related = hub.memberships("hk-0005", page=3, page_size=2)
+
+    assert detail["observations"][0]["price"] == Decimal("12345678901234567890.12345678")
+    assert detail["observations"][0]["providerSymbol"] == "0005.HK"
+    assert related["items"][0]["weight"] == Decimal("0.1234567890123456789012345678")
+    assert requests[0].url.path == "/api/instruments/hk-0005"
+    assert dict(requests[0].url.params) == {"page": "2", "pageSize": "2"}
+    assert requests[1].url.path == "/api/instruments/hk-0005/memberships"
+
+
+def test_instrument_detail_rejects_bad_contract_and_unaddressable_path_segment():
+    with client(lambda request: httpx.Response(200, json={})) as hub:
+        with pytest.raises(ContractError, match="instrumentId"):
+            hub.instrument("hk-0005")
+        with pytest.raises(ValueError):
+            hub.memberships("hk/0005")
 
 
 def test_query_filters_and_sources():

@@ -155,7 +155,10 @@ export function PricesTable({
                 onClick={() => onSelect(key)}
                 onKeyDown={(event) => handleKeyDown(event, index)}
               >
-                <td>{row.sourceId}</td>
+                <td>
+                  {row.sourceId}
+                  {row.isSynthetic ? <span className="badge badge-synthetic badge-inline">SYNTHETIC</span> : null}
+                </td>
                 <td className="instrument" title={row.instrumentId}>
                   {row.instrumentId}
                 </td>

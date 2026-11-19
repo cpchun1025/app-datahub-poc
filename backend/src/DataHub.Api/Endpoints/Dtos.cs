@@ -10,11 +10,15 @@ public sealed record PriceDto(
     DateTimeOffset SourceUpdatedAtUtc,
     DateTimeOffset ReceivedAtUtc,
     long SourceRevision,
-    SourceStatus SourceStatus)
+    SourceStatus SourceStatus,
+    string? ProviderSymbol = null,
+    PriceKind? PriceKind = null,
+    bool IsSynthetic = true)
 {
-    public static PriceDto From(PriceRecord record, SourceStatus status) => new(
+    public static PriceDto From(PriceRecord record, SourceStatus status, bool isSynthetic = true) => new(
         record.SourceId, record.InstrumentId, record.Price, record.Currency,
-        record.SourceUpdatedAtUtc, record.ReceivedAtUtc, record.SourceRevision, status);
+        record.SourceUpdatedAtUtc, record.ReceivedAtUtc, record.SourceRevision, status,
+        record.ProviderSymbol, record.PriceKind, isSynthetic);
 }
 
 /// <summary>價格列表回應附帶各來源嘅精簡 freshness，前端唔使為咗顯示狀態而額外 call /api/sources。</summary>
@@ -38,6 +42,7 @@ public sealed record SourceDto(
     string DisplayName,
     SourceKind Kind,
     bool IsMock,
+    bool IsSynthetic,
     string Description,
     int PriceDecimals,
     SourceStatus Status,
@@ -50,7 +55,59 @@ public sealed record SourceDto(
     DateTimeOffset? LastFeedActivityAtUtc,
     DateTimeOffset? NextSnapshotDueAtUtc,
     string? LastError,
-    DateTimeOffset? LastErrorAtUtc);
+    DateTimeOffset? LastErrorAtUtc,
+    CsvImportStatusDto? CsvImport);
+
+public sealed record CsvImportStatusDto(
+    DateTimeOffset? LastFileCheckAtUtc,
+    DateTimeOffset? LastSuccessfulValidationAtUtc,
+    DateTimeOffset? LastDataImportAtUtc,
+    string? Fingerprint,
+    int RowCount,
+    int ErrorCount,
+    string? LastError);
+
+public sealed record InstrumentObservationDto(
+    string SourceId,
+    string DisplayName,
+    string InstrumentId,
+    string? ProviderSymbol,
+    decimal Price,
+    string Currency,
+    DateTimeOffset SourceUpdatedAtUtc,
+    DateTimeOffset ReceivedAtUtc,
+    PriceKind? PriceKind,
+    SourceStatus SourceStatus,
+    bool IsSynthetic);
+
+public sealed record InstrumentDetailResponse(
+    string InstrumentId,
+    DateTimeOffset ServerTimeUtc,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    IReadOnlyList<InstrumentObservationDto> Observations);
+
+public sealed record IndexMembershipDto(
+    string SourceId,
+    string IndexId,
+    string InstrumentId,
+    decimal Weight,
+    DateOnly EffectiveDate);
+
+public sealed record InstrumentMembershipResponse(
+    string InstrumentId,
+    DateTimeOffset ServerTimeUtc,
+    string SourceId,
+    string SourceStatus,
+    DateTimeOffset? LastSuccessfulValidationAtUtc,
+    string? LastError,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages,
+    IReadOnlyList<IndexMembershipDto> Items);
 
 public sealed record SourceListResponse(
     DateTimeOffset ServerTimeUtc,

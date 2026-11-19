@@ -221,6 +221,45 @@ public class ApiReadTests(LiveApiFixture api) : IClassFixture<LiveApiFixture>
         Assert.Equal("beta", canonical.SourceId);
     }
 
+    [Fact]
+    public async Task InstrumentDetail_ReturnsPagedSourceObservationsWithoutConsolidating()
+    {
+        var reply = (await Client.GetReplyAsync("/api/instruments/SHARED?page=1&pageSize=2"))
+            .Expect(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(reply.Body);
+        var root = document.RootElement;
+        Assert.Equal("SHARED", root.GetProperty("instrumentId").GetString());
+        Assert.Equal(3, root.GetProperty("totalCount").GetInt32());
+        Assert.Equal(2, root.GetProperty("observations").GetArrayLength());
+        Assert.Equal(2, root.GetProperty("totalPages").GetInt32());
+        Assert.Equal(["alpha", "beta"], root.GetProperty("observations").EnumerateArray()
+            .Select(item => item.GetProperty("sourceId").GetString()));
+
+        var second = (await Client.GetReplyAsync("/api/instruments/SHARED?page=2&pageSize=2"))
+            .Expect(HttpStatusCode.OK);
+        using var secondDocument = JsonDocument.Parse(second.Body);
+        Assert.Equal("gamma", secondDocument.RootElement.GetProperty("observations")[0].GetProperty("sourceId").GetString());
+    }
+
+    [Fact]
+    public async Task InstrumentMemberships_ReturnsBoundedEmptyStateAndValidationProblems()
+    {
+        var reply = (await Client.GetReplyAsync("/api/instruments/SHARED/memberships?page=1&pageSize=2"))
+            .Expect(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(reply.Body);
+        var root = document.RootElement;
+        Assert.Equal(0, root.GetProperty("totalCount").GetInt32());
+        Assert.Empty(root.GetProperty("items").EnumerateArray());
+        Assert.Equal("Disabled", root.GetProperty("sourceStatus").GetString());
+
+        var invalidPage = await Client.GetReplyAsync("/api/instruments/SHARED?page=0");
+        var problem = invalidPage.ExpectProblem(HttpStatusCode.BadRequest);
+        Assert.Contains("page", problem.Errors!.Keys);
+
+        var invalidIdentity = (await Client.GetReplyAsync("/api/instruments/%20")).ExpectProblem(HttpStatusCode.BadRequest);
+        Assert.Contains("instrumentId", invalidIdentity.Errors!.Keys);
+    }
+
     [Theory]
     [InlineData("/api/prices/nope/AAA", "Unknown source")]
     [InlineData("/api/prices/alpha/NOPE", "Instrument not found")]
@@ -303,6 +342,8 @@ public class ApiReadTests(LiveApiFixture api) : IClassFixture<LiveApiFixture>
         [
             "/api/health",
             "/api/sources",
+            "/api/instruments/{instrumentId}",
+            "/api/instruments/{instrumentId}/memberships",
             "/api/prices",
             "/api/prices/{sourceId}/{instrumentId}",
             "/api/admin/snapshot/{sourceId}",
@@ -319,6 +360,14 @@ public class ApiReadTests(LiveApiFixture api) : IClassFixture<LiveApiFixture>
             .Expect(HttpStatusCode.OK).Body);
         var root = document.RootElement;
         var paths = root.GetProperty("paths");
+        var instrumentDetail = paths.GetProperty("/api/instruments/{instrumentId}").GetProperty("get");
+        Assert.Equal("#/components/schemas/InstrumentDetailResponse",
+            ResponseSchema(instrumentDetail, "200", "application/json").GetProperty("$ref").GetString());
+        var memberships = paths.GetProperty("/api/instruments/{instrumentId}/memberships").GetProperty("get");
+        Assert.Equal("#/components/schemas/InstrumentMembershipResponse",
+            ResponseSchema(memberships, "200", "application/json").GetProperty("$ref").GetString());
+        AssertValidationResponse(instrumentDetail);
+        AssertValidationResponse(memberships);
         var news = paths.GetProperty("/api/news").GetProperty("get");
         var parameters = news.GetProperty("parameters").EnumerateArray().ToArray();
         Assert.Equal(

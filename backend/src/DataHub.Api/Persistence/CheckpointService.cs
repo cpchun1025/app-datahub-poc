@@ -1,6 +1,7 @@
 using DataHub.Api.Configuration;
 using DataHub.Api.Store;
 using DataHub.Api.News;
+using DataHub.Api.Csv;
 using Microsoft.Extensions.Options;
 
 namespace DataHub.Api.Persistence;
@@ -58,7 +59,9 @@ public sealed class CheckpointService
     private CheckpointStatus _status;
     private long _lastSavedVersion = -1;
     private long _lastSavedNewsVersion = -1;
+    private long _lastSavedCompositionVersion = -1;
     private readonly NewsStore? _news;
+    private readonly CompositionStore? _composition;
 
     public CheckpointService(
         ILatestStateStore store,
@@ -66,13 +69,15 @@ public sealed class CheckpointService
         IOptions<DataHubOptions> options,
         TimeProvider time,
         ILogger<CheckpointService> logger,
-        NewsStore? news = null)
+        NewsStore? news = null,
+        CompositionStore? composition = null)
     {
         _store = store;
         _fileStore = fileStore;
         _time = time;
         _logger = logger;
         _news = news;
+        _composition = composition;
         Enabled = options.Value.Checkpoint.Enabled;
         _status = new CheckpointStatus { Enabled = Enabled };
     }
@@ -88,6 +93,7 @@ public sealed class CheckpointService
         {
             Volatile.Write(ref _lastSavedVersion, storeVersion);
             Volatile.Write(ref _lastSavedNewsVersion, _news?.Capture().Version ?? 0);
+            Volatile.Write(ref _lastSavedCompositionVersion, _composition?.Capture().Version ?? 0);
         }
 
         UpdateStatus(status => status with
@@ -119,15 +125,18 @@ public sealed class CheckpointService
         {
             var capture = _store.Capture();
             var news = _news?.Capture() ?? new NewsCapture(0, [], []);
+            var composition = _composition?.Capture() ?? new CompositionCapture(0, [], new(null, null, null, null, 0, 0, null));
 
             // 完全未有任何資料（未恢復、未 sync）就唔寫，避免用空檔案蓋走上一次嘅有效 checkpoint。
-            if (news.Identities.Count == 0 && capture.Sources.All(source => source.RecordCount == 0 && source.LastSnapshotAtUtc is null))
+            if (news.Identities.Count == 0 && composition.Status.Fingerprint is null
+                && capture.Sources.All(source => source.RecordCount == 0 && source.LastSnapshotAtUtc is null))
             {
                 return new CheckpointRunResult(CheckpointOutcome.SkippedEmpty, Status);
             }
 
             if (trigger != CheckpointTrigger.Manual && capture.Version == Volatile.Read(ref _lastSavedVersion)
-                && news.Version == Volatile.Read(ref _lastSavedNewsVersion))
+                && news.Version == Volatile.Read(ref _lastSavedNewsVersion)
+                && composition.Version == Volatile.Read(ref _lastSavedCompositionVersion))
             {
                 return new CheckpointRunResult(CheckpointOutcome.SkippedUnchanged, Status);
             }
@@ -138,10 +147,16 @@ public sealed class CheckpointService
             try
             {
                 var payload = new CheckpointPayload(capture.Version, attemptedAt, capture.Sources)
-                    { News = news.Items, NewsIdentities = news.Identities };
+                {
+                    News = news.Items,
+                    NewsIdentities = news.Identities,
+                    Memberships = composition.Memberships,
+                    CompositionStatus = composition.Status,
+                };
                 var result = await _fileStore.SaveAsync(payload, cancellationToken);
                 Volatile.Write(ref _lastSavedVersion, capture.Version);
                 Volatile.Write(ref _lastSavedNewsVersion, news.Version);
+                Volatile.Write(ref _lastSavedCompositionVersion, composition.Version);
 
                 var savedAt = _time.GetUtcNow();
                 UpdateStatus(status => status with

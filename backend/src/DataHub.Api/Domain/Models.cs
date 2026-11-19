@@ -10,7 +10,9 @@ public sealed record PriceUpdate(
     decimal Price,
     string Currency,
     DateTimeOffset SourceUpdatedAtUtc,
-    long Revision);
+    long Revision,
+    string? ProviderSymbol = null,
+    PriceKind? PriceKind = null);
 
 /// <summary>
 /// Hub 內保存嘅最新狀態。Key = (SourceId, InstrumentId)，所以不同來源嘅相同 InstrumentId 唔會互相覆蓋。
@@ -22,12 +24,20 @@ public sealed record PriceRecord(
     string Currency,
     DateTimeOffset SourceUpdatedAtUtc,
     DateTimeOffset ReceivedAtUtc,
-    long SourceRevision);
+    long SourceRevision,
+    string? ProviderSymbol = null,
+    PriceKind? PriceKind = null);
+
+public enum PriceKind
+{
+    Last,
+}
 
 public enum SourceKind
 {
     Streaming,
     Polling,
+    Csv,
 }
 
 public sealed record SourceDescriptor(
@@ -36,7 +46,8 @@ public sealed record SourceDescriptor(
     SourceKind Kind,
     bool IsMock,
     int PriceDecimals,
-    string Description);
+    string Description,
+    bool IsSynthetic = true);
 
 /// <summary>
 /// 完整 snapshot。<see cref="Revision"/> 係切 snapshot 嗰刻嘅 source revision：
@@ -45,7 +56,8 @@ public sealed record SourceDescriptor(
 public sealed record SourceSnapshot(
     long Revision,
     DateTimeOffset TakenAtUtc,
-    IReadOnlyList<PriceUpdate> Records);
+    IReadOnlyList<PriceUpdate> Records,
+    bool UnchangedContent = false);
 
 /// <summary>Polling 結果：自 afterRevision 之後變更過嘅 record（每個 instrument 只有最新值），以及 poll 當刻嘅 source revision。</summary>
 public sealed record PollResult(

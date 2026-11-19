@@ -4,6 +4,12 @@
   box-sizing: border-box;
 }
 
+@media (max-width: 800px) {
+  .instrument-explorer { max-height: 42vh; }
+  .instrument-explorer-grid { grid-template-columns: minmax(0, 1fr); }
+  .source-filter-count { margin-left: 0; }
+}
+
 html,
 body,
 #root {
@@ -145,6 +151,40 @@ select {
   color: var(--cyan);
   letter-spacing: 0.04em;
 }
+
+.source-panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.source-panel-heading h2 {
+  margin: 0;
+  color: inherit;
+  font: inherit;
+}
+.source-summary { color: var(--text-dim); font-size: 10px; font-weight: 400; letter-spacing: 0.02em; }
+.source-toggle { margin-left: auto; }
+.source-monitor-content { border-bottom: 1px solid var(--border); }
+.source-monitor-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 6px 12px;
+  padding: 5px 10px;
+  background: var(--bg-panel);
+}
+.source-monitor-filters label { display: grid; gap: 2px; color: var(--text-faint); font-size: 10px; }
+.source-monitor-filters input,
+.source-monitor-filters select {
+  min-height: 26px;
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+}
+.source-filter-count { margin-left: auto; color: var(--text-dim); font-size: 10px; }
+.badge-synthetic { color: var(--cyan); border-color: var(--cyan); }
+.badge-inline { margin-left: 4px; }
 
 .panel-note {
   margin-left: auto;
@@ -496,7 +536,7 @@ select {
 }
 
 .panel-scroll {
-  max-height: 28vh;
+  max-height: 30vh;
   overflow: auto;
 }
 
@@ -520,6 +560,43 @@ select {
   letter-spacing: 0.04em;
   line-height: 14px;
 }
+
+.instrument-explorer {
+  flex: 0 0 auto;
+  max-height: 34vh;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.instrument-explorer > h3 { position: sticky; top: 0; z-index: 1; }
+.instrument-explorer h4 {
+  margin: 6px 10px 2px;
+  color: var(--amber);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+.instrument-explorer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 0 10px 6px;
+}
+.dataset-as-of { margin: 2px 10px 5px; color: var(--text-faint); font-size: 10px; }
+.related-list { display: grid; gap: 2px; }
+.related-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 3px 6px;
+  background: var(--bg);
+  border-left: 2px solid var(--border-strong);
+  font-size: 11px;
+}
+.related-pagination { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 4px; font-size: 10px; }
+.diagnostics { border-top: 1px solid var(--border); }
+.diagnostics summary { padding: 4px 10px; color: var(--text-dim); cursor: pointer; font-size: 10px; letter-spacing: 0.08em; }
+.diagnostics .detail { border-top: 0; }
 
 .prices {
   display: flex;

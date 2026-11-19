@@ -18,9 +18,10 @@ public sealed class PriceReadService(ILatestStateStore store, SourceViewService 
             .Where(v => (query.SourceId is null || v.Descriptor.SourceId.Equals(query.SourceId, StringComparison.OrdinalIgnoreCase))
                 && (status is null || v.Status == status))
             .ToArray();
-        var statuses = views.ToDictionary(v => v.Descriptor.SourceId, v => v.Status, StringComparer.Ordinal);
+        var sourceViews = views.ToDictionary(v => v.Descriptor.SourceId, StringComparer.Ordinal);
         var result = PriceQueryEngine.Execute(views.Select(v => v.Data).ToArray(), query, cancellationToken, allMatching, exportLimit);
-        var items = result.Items.Select(row => PriceDto.From(row, statuses[row.SourceId])).ToArray();
+        var items = result.Items.Select(row => PriceDto.From(row, sourceViews[row.SourceId].Status,
+            sourceViews[row.SourceId].Descriptor.IsSynthetic)).ToArray();
         var freshness = views.Select(v => new SourceFreshnessDto(v.Descriptor.SourceId, v.Status,
             v.Runtime.SyncedSinceStart, v.Data.LastUpdateReceivedAtUtc)).ToArray();
         var totalPages = (int)Math.Min(int.MaxValue, (result.TotalCount + query.PageSize - 1) / query.PageSize);
